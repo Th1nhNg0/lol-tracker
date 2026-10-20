@@ -1,18 +1,28 @@
 <div align="center">
 
-# LoL Tracker
+<img src="docs/social-preview.jpg" alt="Rift Recap" width="900">
 
-**A self-hosted Discord bot for friend groups who play League of Legends together.**
-It watches your ranked games, posts a clean scoreboard the moment each one ends,
-adds optional AI commentary, and sums up the day, week and month in LP.
+# Rift Recap
+
+**The Discord bot your League squad has been missing.**<br>
+A scoreboard the moment each game ends, LP changes for everyone, funny AI commentary, and daily, weekly and monthly recaps. Self-hosted, around 20 MB of RAM.
 
 [![Rust](https://img.shields.io/badge/Rust-2024-orange?logo=rust)](https://www.rust-lang.org/)
+[![Docker](https://img.shields.io/badge/Docker-31%20MB-2496ED?logo=docker&logoColor=white)](#docker)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Languages](https://img.shields.io/badge/bot%20language-English%20%7C%20Ti%E1%BA%BFng%20Vi%E1%BB%87t-green)](#configuration)
-
-<img src="docs/images/scoreboard-en.webp" alt="Match scoreboard" width="860">
+[![Release](https://img.shields.io/github/v/release/Th1nhNg0/rift-recap?include_prereleases)](https://github.com/Th1nhNg0/rift-recap/releases)
 
 </div>
+
+## Why
+
+You and your friends grind ranked together, then argue about who carried and who fed. Rift Recap settles it: it watches your games through the official Riot API, posts a full scoreboard to Discord within a couple of minutes, shows exactly how many LP each of you won or lost, and, if you want, roasts the worst player in your own voice.
+
+- **No website, no copy-pasting match links.** Games appear in your channel by themselves.
+- **Your server, your data.** One small binary and one SQLite file. No accounts, no tracking, no third-party service.
+- **Built for a friend group**, not for the whole ladder: it tracks the people you pick and compares them with each other.
+
+<img src="docs/images/scoreboard-en.webp" alt="Match scoreboard" width="860">
 
 ## Features
 
@@ -22,7 +32,7 @@ adds optional AI commentary, and sums up the day, week and month in LP.
 - **Optional AI commentary** – a short, funny line per tracked player with a title and emoji, written by any OpenAI-compatible model in the voice *you* define in a `prompt.md`. Custom Discord emojis are supported.
 - **Slash commands** – `/lastgame`, `/rank`, `/players` and admin `/config` for channels, roster and on-demand reports.
 - **English and Vietnamese** – messages, images and slash-command descriptions.
-- **Small and self-contained** – one Rust binary. SQLite is bundled, fonts are embedded, images are drawn with `resvg`. No browser, Python or Node. Around 20 MB of RAM.
+- **Tiny and self-contained** – one Rust binary. SQLite is bundled, fonts are embedded, images are drawn with `resvg`. No browser, Python or Node. A 31 MB Docker image, around 20 MB of RAM when idle and about 45 MB at peak.
 
 ## Screenshots
 
@@ -38,9 +48,9 @@ adds optional AI commentary, and sums up the day, week and month in LP.
 
 Everything above is rendered from anonymised sample data. Set `language = "vi"` for Vietnamese output.
 
-### What a result looks like
+### What an AI comment looks like
 
-The scoreboard is posted first, then the AI commentary is edited into the message text a few seconds later:
+The scoreboard is posted first, then the commentary is edited into the message text a few seconds later:
 
 > 🛡️ **Atlas** — *Stone Wall*: Ornn soaked 48k damage and still showed up for 18 assists, but Malphite out-traded him all game.
 > 🔥 **Pixel** — *Jungle Furnace*: 20 takedowns, 13 deaths. The fire was real, the exit wasn't.
@@ -52,25 +62,44 @@ The scoreboard is posted first, then the AI commentary is edited into the messag
 
 ## Quick start
 
-### Requirements
+You need three things, whichever way you run it:
 
-- A recent stable **Rust** toolchain (edition 2024) and a C compiler (for the bundled SQLite).
-- A **Riot developer API key** from <https://developer.riotgames.com/> with Account-V1, Match-V5 and League-V4. Development keys expire after 24 hours; apply for a personal or production key for a long-running bot.
+- A **Riot API key** from <https://developer.riotgames.com/> with Account-V1, Match-V5 and League-V4. Development keys expire after 24 hours, so register a personal key for a bot that should keep running.
 - A **Discord bot** invited with the `bot` and `applications.commands` scopes. In the channels it posts to it needs **View Channel**, **Send Messages** and **Attach Files**. No administrator rights and no privileged intents; only the `GUILDS` intent is used.
+- The Riot IDs of your friends.
 
-### Install and configure
+### Docker
 
 ```sh
-git clone https://github.com/Th1nhNg0/lol-tracker.git
-cd lol-tracker
-cargo build --release --locked
+git clone https://github.com/Th1nhNg0/rift-recap.git && cd rift-recap
+mkdir bot
+cp config.example.toml bot/config.toml
+cp players.example.json bot/players.json
+cp .env.example bot/.env          # then edit all three files
 
-# Keep secrets and player names outside the repository.
+docker compose build
+docker compose run --rm rift-recap --config /bot/config.toml --env-file /bot/.env run --register-commands
+# wait for "Guild tracker commands installed", press Ctrl-C, then:
+docker compose up -d
+```
+
+The container runs as your user (`UID`/`GID`, default 1000) and keeps the database and artwork cache in `./bot/data`.
+
+### Prebuilt binary
+
+Download the static Linux binary from the [latest release](https://github.com/Th1nhNg0/rift-recap/releases/latest) and run it with the same arguments as below. It has no dependencies.
+
+### From source
+
+```sh
+git clone https://github.com/Th1nhNg0/rift-recap.git && cd rift-recap
+cargo build --release --locked        # Rust 2024 edition and a C compiler for the bundled SQLite
+
 umask 077
-mkdir -p ~/.config/lol-tracker
-cp config.example.toml ~/.config/lol-tracker/config.toml
-cp players.example.json ~/.config/lol-tracker/players.json
-cp .env.example ~/.config/lol-tracker/.env
+mkdir -p ~/.config/rift-recap
+cp config.example.toml ~/.config/rift-recap/config.toml
+cp players.example.json ~/.config/rift-recap/players.json
+cp .env.example ~/.config/rift-recap/.env
 ```
 
 1. `.env` – set `RIOT_API_KEY` and `DISCORD_TOKEN`.
@@ -85,11 +114,9 @@ cp .env.example ~/.config/lol-tracker/.env
 
    This file only seeds a *new* database. After that, use `/config addplayer` and `/config removeplayer`.
 
-### Check, then run
-
 ```sh
-bin=./target/release/lol-tracker
-args="--config $HOME/.config/lol-tracker/config.toml --env-file $HOME/.config/lol-tracker/.env"
+bin=./target/release/rift-recap
+args="--config $HOME/.config/rift-recap/config.toml --env-file $HOME/.config/rift-recap/.env"
 
 $bin $args check                    # validate config and storage, no network
 $bin $args probe                    # read-only check of the Riot key and Discord token
@@ -162,15 +189,15 @@ timeout_secs = 90
 ## Run it as a service
 
 ```ini
-# /etc/systemd/system/lol-tracker.service
+# /etc/systemd/system/rift-recap.service
 [Unit]
 Description=LoL tracker Discord bot
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-WorkingDirectory=/opt/lol-tracker
-ExecStart=/opt/lol-tracker/lol-tracker --config /opt/lol-tracker/config.toml --env-file /opt/lol-tracker/.env run
+WorkingDirectory=/opt/rift-recap
+ExecStart=/opt/rift-recap/rift-recap --config /opt/rift-recap/config.toml --env-file /opt/rift-recap/.env run
 Restart=always
 RestartSec=10
 MemoryMax=300M
@@ -181,12 +208,38 @@ WantedBy=multi-user.target
 
 State lives in one SQLite file in WAL mode. To back it up, stop the service or use SQLite's `.backup`. Pending Discord posts are kept in the database and retried, so a restart or an outage loses nothing.
 
+## How it works
+
+```mermaid
+flowchart LR
+    R[Riot API<br>Match-V5, League-V4] -->|every 30-60 s| T[Tracker]
+    T --> S[(SQLite)]
+    S --> I[Image renderer<br>resvg]
+    S --> L[AI commentary<br>optional]
+    I --> D[Discord]
+    L --> D
+```
+
+The tracker polls match history for your roster, stores every new game together with rank snapshots, and queues a post in a transactional outbox, so a crash or a Discord outage never loses a result. The renderer draws SVG and rasterises it in-process.
+
+## FAQ
+
+**Is this allowed by Riot?** It only uses the official, public API with your own key and respects its rate limits. It does not scrape, inject or read the game client.
+
+**Can it track players on other regions?** Yes, set `riot.platform` (`na1`, `euw1`, `kr`, `vn2`, ...). One bot serves one Discord server and one platform.
+
+**Do I need the AI part?** No. It is off by default and the bot is fully useful without it.
+
+**How much does it cost to run?** Next to nothing: about 20 requests per minute to Riot, a few MB of disk, and a 1 vCPU, 256 MB machine is plenty.
+
+**Why a bot and not a web page?** Your squad is already in Discord. Results show up where you talk, with nothing to open.
+
 ## Development
 
 ```sh
 cargo build --locked
-./target/debug/lol-tracker --env-file .env render-scoreboard --language all --output data/board.png
-./target/debug/lol-tracker --env-file .env render-report --period weekly --language all --output data/report.png
+./target/debug/rift-recap --env-file .env render-scoreboard --language all --output data/board.png
+./target/debug/rift-recap --env-file .env render-report --period weekly --language all --output data/report.png
 ```
 
 `render-scoreboard` draws a stored or recent real match to a PNG (add `--post` to send one image to the games channel). `render-report` does the same for a report and prints its text form. Neither imports matches, touches baselines or calls an LLM.
@@ -204,8 +257,14 @@ cargo build --locked
 
 Artwork (champions, items, objective icons) is fetched from public Data Dragon and Community Dragon URLs at render time and cached next to the database; nothing from Riot is committed. If it cannot be fetched, images fall back to placeholders. No Riot API key is ever sent to those hosts.
 
+## Contributing
+
+Issues and pull requests are welcome. Good first areas: more languages in `src/i18n.rs` (every message has one string per language and the compiler checks the catalogue), new report honours, and support for more queues. Please keep the project dependency-light and the binary self-contained.
+
+If Rift Recap made your squad's ranked nights more fun, a star helps others find it.
+
 ## Legal
 
-LoL Tracker is not endorsed by Riot Games and does not reflect the views or opinions of Riot Games or anyone officially involved in producing or managing Riot Games properties. Riot Games and all associated properties are trademarks or registered trademarks of Riot Games, Inc.
+Rift Recap is not endorsed by Riot Games and does not reflect the views or opinions of Riot Games or anyone officially involved in producing or managing Riot Games properties. Riot Games and all associated properties are trademarks or registered trademarks of Riot Games, Inc.
 
 The bundled Be Vietnam Pro fonts are licensed under the SIL Open Font License 1.1 ([`assets/fonts`](assets/fonts)). The code is released under the [MIT License](LICENSE).
