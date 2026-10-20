@@ -30,7 +30,17 @@ async fn scoreboard_image(app: &App, game: &Match) -> Option<Vec<u8>> {
 fn missing(error: &serenity::Error) -> bool {
     matches!(error, serenity::Error::Http(HttpError::UnsuccessfulRequest(r)) if r.status_code.as_u16() == 404)
 }
-fn safe_http<T>(value: serenity::Result<T>) -> Result<T> { value.map_err(|_| anyhow::anyhow!("Discord request failed; check token, permissions and connectivity")) }
+fn safe_http<T>(value: serenity::Result<T>) -> Result<T> {
+    value.map_err(|error| {
+        // Discord's status and error text describe the rejection only; they never echo credentials.
+        if let serenity::Error::Http(HttpError::UnsuccessfulRequest(r)) = &error {
+            warn!(status = r.status_code.as_u16(), code = r.error.code, message = %r.error.message, "Discord rejected the request");
+        } else {
+            warn!(%error, "Discord request failed");
+        }
+        anyhow::anyhow!("Discord request failed; check token, permissions and connectivity")
+    })
+}
 
 /// An already-localized message meant for the invoking member. Any other error is logged and
 /// replaced by a generic localized message, so internal details never reach Discord.
@@ -310,6 +320,8 @@ fn choice(option: CreateCommandOption, value: &str, msg: Msg) -> CreateCommandOp
 }
 pub async fn register(http: &Http, guild: u64) -> Result<()> {
     use CommandOptionType::{Boolean, Channel, String as Text, SubCommand};
+    // Registration runs before the gateway reports the application id, so look it up first.
+    http.set_application_id(safe_http(http.get_current_application_info().await)?.id);
     let channel = || option(Channel, "channel", Msg::OptChannel).channel_types(vec![ChannelType::Text, ChannelType::News]);
     let riot_id = || option(Text, "riot_id", Msg::OptRiotId).required(true).max_length(90);
     let period = choice(choice(choice(option(Text, "period", Msg::OptPeriod).required(true), "daily", Msg::ChoiceDaily), "weekly", Msg::ChoiceWeekly), "monthly", Msg::ChoiceMonthly);
