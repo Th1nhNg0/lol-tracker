@@ -23,7 +23,7 @@ use tokio::{sync::Semaphore, task::JoinSet};
 use tracing::info;
 
 #[derive(Parser)]
-#[command(version, about = "Standalone Riot match tracker. Defaults to offline configuration checking.")]
+#[command(version, about = "Self-hosted League of Legends squad tracker and Discord bot. Defaults to offline configuration checking.")]
 struct Cli {
     #[arg(long, default_value = "config.toml", global = true)]
     config: PathBuf,
@@ -103,7 +103,7 @@ impl App {
 #[tokio::main]
 async fn main() {
     // Intentionally exclude dependency HTTP/gateway logs, which can contain private data.
-    tracing_subscriber::fmt().with_env_filter("lol_tracker=info").with_target(false).init();
+    tracing_subscriber::fmt().with_env_filter("rift_recap=info").with_target(false).init();
     if let Err(error) = execute().await {
         eprintln!("Error: {error}");
         std::process::exit(1);

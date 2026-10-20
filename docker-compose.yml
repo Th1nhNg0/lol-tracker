@@ -1,0 +1,11 @@
+# Put config.toml, players.json, .env (and optionally prompt.md) in ./bot, then: docker compose up -d
+services:
+  rift-recap:
+    build: .
+    image: rift-recap
+    restart: unless-stopped
+    # The container user must be able to write the SQLite database and artwork cache in ./bot/data.
+    user: "${UID:-1000}:${GID:-1000}"
+    volumes:
+      - ./bot:/bot
+    mem_limit: 256m

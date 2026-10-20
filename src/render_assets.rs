@@ -38,7 +38,7 @@ impl Assets {
     async fn prepare(wanted: Wanted, directory: PathBuf) -> Result<Self> {
         fs::create_dir_all(&directory)?;
         let cache = Cache { directory, http: Client::builder().connect_timeout(Duration::from_secs(4)).timeout(Duration::from_secs(8))
-            .redirect(reqwest::redirect::Policy::none()).user_agent("lol-tracker-rust/0.1").build()? };
+            .redirect(reqwest::redirect::Policy::none()).user_agent("rift-recap/0.1").build()? };
         let versions = cache.json("/api/versions.json").await?;
         let version = versions[0].as_str().ok_or_else(|| anyhow::anyhow!("No Data Dragon version"))?.to_owned();
         ensure!(!version.is_empty() && version.chars().all(|c| c.is_ascii_digit() || c == '.'), "Invalid artwork version");

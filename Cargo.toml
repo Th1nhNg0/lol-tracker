@@ -1,9 +1,9 @@
 [package]
-name = "lol-tracker"
+name = "rift-recap"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-description = "Standalone Riot match tracker and Discord bot with optional AI commentary"
+description = "Self-hosted Discord bot that posts a scoreboard after every League of Legends game your squad plays, plus daily, weekly and monthly LP recaps"
 publish = false
 
 [dependencies]

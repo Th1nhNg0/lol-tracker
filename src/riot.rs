@@ -21,7 +21,7 @@ impl Riot {
         token.set_sensitive(true);
         headers.insert("X-Riot-Token", token);
         let http = Client::builder().timeout(Duration::from_secs(20)).connect_timeout(Duration::from_secs(8))
-            .redirect(reqwest::redirect::Policy::none()).user_agent("lol-tracker-rust/0.1")
+            .redirect(reqwest::redirect::Policy::none()).user_agent("rift-recap/0.1")
             .build().map_err(|_| anyhow::anyhow!("Cannot initialize Riot HTTP client"))?;
         Ok(Self { http, headers, platform: platform.into(), region: config::region(platform).ok_or_else(|| anyhow::anyhow!("Invalid platform"))?.into(), gate: Arc::new(Mutex::new(Instant::now())), spacing: Duration::from_millis(spacing_ms) })
     }

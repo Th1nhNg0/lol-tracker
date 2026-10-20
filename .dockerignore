@@ -1,0 +1,10 @@
+target
+.git
+data
+.env
+.env.*
+config.toml
+players.json
+prompt.md
+docs
+*.db
