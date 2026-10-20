@@ -7,12 +7,15 @@ use tracing::{info, warn};
 /// A post-game rank is attributed to one match only if fetched this soon after it ended;
 /// no second complete game fits inside this window.
 const LP_WINDOW_SECS: i64 = 1200;
+/// A restart this quick keeps the previous run's rank snapshots trusted (a deploy must not cost LP).
+const CONTINUITY_SECS: i64 = 180;
 
 pub struct Tracker {
     app: Arc<App>,
-    /// Unix time this process started tracking. Only rank snapshots taken since then are trusted
-    /// as a "before" rank, so downtime can never be folded into one match's LP change.
+    /// Unix time since which tracking has been continuous. Only rank snapshots taken since then are
+    /// trusted as a "before" rank, so downtime can never be folded into one match's LP change.
     since: i64,
+    last_beat: i64,
     history_due: Instant,
     rank_due: Instant,
     prune_due: Instant,
@@ -20,7 +23,10 @@ pub struct Tracker {
 impl Tracker {
     pub fn new(app: Arc<App>) -> Self {
         let now = Instant::now();
-        Self { app, since: crate::model::now(), history_due: now, rank_due: now, prune_due: now }
+        // After a longer gap other games may sit between an old snapshot and the next game, so only newer snapshots count.
+        let since = app.store.setting("heartbeat").ok().flatten().and_then(|t| t.parse::<i64>().ok())
+            .filter(|t| crate::model::now() - t <= CONTINUITY_SECS).unwrap_or_else(crate::model::now);
+        Self { app, since, last_beat: 0, history_due: now, rank_due: now, prune_due: now }
     }
     pub async fn run(mut self, once: bool) -> Result<()> {
         if once { return self.tick().await; }
@@ -34,6 +40,11 @@ impl Tracker {
     async fn tick(&mut self) -> Result<()> {
         let mut failed = false;
         let mut check = |step: &str, result: Result<()>| if let Err(error) = result { warn!(%error, step, "Tracking step failed; will retry"); failed = true; };
+        // The heartbeat lets the next start tell a quick restart from real downtime.
+        if now() - self.last_beat >= 30 {
+            self.last_beat = now();
+            check("heartbeat", self.app.store.set("heartbeat", &now().to_string()));
+        }
         // Ranks first: a fresh snapshot must exist before any game it could serve as a baseline for.
         if Instant::now() >= self.rank_due {
             self.rank_due = Instant::now() + Duration::from_secs(1800);

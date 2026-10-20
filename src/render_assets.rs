@@ -12,15 +12,16 @@ pub const OBJECTIVES: [&str; 5] = ["dragon", "baron", "herald", "tower", "inhibi
 
 /// Artwork an image needs, keyed by Match-V5 champion names and numeric IDs.
 #[derive(Default)]
-pub struct Wanted { pub champions: BTreeSet<String>, pub splash: Option<String>, pub items: BTreeSet<i64>, pub objectives: bool }
+pub struct Wanted { pub champions: BTreeSet<String>, pub splash: Option<String>, pub items: BTreeSet<i64>, pub objectives: bool, pub spells: BTreeSet<i64>, pub runes: BTreeSet<i64> }
 impl Wanted {
     pub fn from_match(game: &Match) -> Self {
-        let focus = game.participants.iter().filter(|p| p.tracked).max_by_key(|p| p.damage).or_else(|| game.participants.first());
         Self {
             champions: game.participants.iter().map(|p| p.champion.clone()).collect(),
-            splash: focus.map(|p| p.champion.clone()),
+            splash: None,
             items: game.participants.iter().flat_map(|p| p.items.iter().copied()).filter(|id| *id > 0).collect(),
             objectives: !game.objectives.is_empty(),
+            spells: game.participants.iter().flat_map(|p| p.spells.iter().copied()).collect(),
+            runes: game.participants.iter().flat_map(|p| p.runes.iter().copied()).collect(),
         }
     }
 }
@@ -53,6 +54,27 @@ impl Assets {
                 && let Some(id) = champ["id"].as_str() { jobs.insert("splash".into(), format!("/cdn/img/champion/splash/{id}_0.jpg")); }
         }
         for id in &wanted.items { jobs.insert(format!("item:{id}"), format!("/cdn/{version}/img/item/{id}.png")); }
+        if !wanted.spells.is_empty() {
+            let spells = cache.json(&format!("/cdn/{version}/data/en_US/summoner.json")).await.unwrap_or(Value::Null);
+            for id in &wanted.spells {
+                if let Some(file) = spells["data"].as_object().and_then(|m| m.values().find(|v| v["key"].as_str().and_then(|s| s.parse::<i64>().ok()) == Some(*id))).and_then(|v| v["image"]["full"].as_str()) {
+                    jobs.insert(format!("spell:{id}"), format!("/cdn/{version}/img/spell/{file}"));
+                }
+            }
+        }
+        if !wanted.runes.is_empty() {
+            let runes = cache.json(&format!("/cdn/{version}/data/en_US/runesReforged.json")).await.unwrap_or(Value::Null);
+            let mut rune_icons = HashMap::new();
+            for style in runes.as_array().into_iter().flatten() {
+                if let (Some(id), Some(icon)) = (style["id"].as_i64(), style["icon"].as_str()) { rune_icons.insert(id, icon.to_owned()); }
+                for rune in style["slots"].as_array().into_iter().flatten().flat_map(|slot| slot["runes"].as_array().into_iter().flatten()) {
+                    if let (Some(id), Some(icon)) = (rune["id"].as_i64(), rune["icon"].as_str()) { rune_icons.insert(id, icon.to_owned()); }
+                }
+            }
+            for id in &wanted.runes {
+                if let Some(icon) = rune_icons.get(id) { jobs.insert(format!("rune:{id}"), format!("/cdn/img/{icon}")); }
+            }
+        }
         if wanted.objectives {
             for kind in OBJECTIVES { for team in [100, 200] { jobs.insert(format!("objective:{kind}-{team}"), format!("/objective/{kind}-{team}.png")); } }
         }

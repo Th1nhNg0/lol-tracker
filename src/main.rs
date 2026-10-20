@@ -6,6 +6,7 @@ mod model;
 mod presentation;
 mod reports;
 mod render_assets;
+mod scoreboard;
 mod render;
 mod report_card;
 mod riot;

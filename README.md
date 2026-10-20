@@ -16,7 +16,7 @@ adds optional AI commentary, and sums up the day, week and month in LP.
 
 ## Features
 
-- **Post-game scoreboard** – a single image with all ten players: KDA, damage, damage taken, CS, gold, vision and items, plus a team gold and objectives strip (dragons, Baron, Herald, towers, inhibitors).
+- **Post-game scoreboard** – one image with all ten players in tinted team blocks: KDA with kill participation, damage dealt and taken, vision, CS, items, summoner spells and runes. A strip between the teams compares objectives (dragons, Baron, Herald, towers, inhibitors), total kills and total gold.
 - **LP and rank per game** – Solo/Duo and Flex, with the LP gained or lost shown next to each tracked player. `MVP` and `WORST` labels sit on the portraits.
 - **Daily, weekly and monthly reports** – one LP bar per player, the biggest climber and the biggest drop framed, and six honours (kills, deaths, damage, farm, vision, win rate) on weekly and monthly cards.
 - **Optional AI commentary** – a short, funny line per tracked player with a title and emoji, written by any OpenAI-compatible model in the voice *you* define in a `prompt.md`. Custom Discord emojis are supported.

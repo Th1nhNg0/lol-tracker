@@ -256,7 +256,6 @@ catalog! {
     ChoiceMonthly: "Hằng tháng", "Monthly";
 
     // Images
-    ImgHeader: "LOL TRACKER  /  KẾT QUẢ TRẬN", "LOL TRACKER  /  MATCH REPORT";
     ImgVictory: "CHIẾN THẮNG", "VICTORY";
     ImgDefeat: "THẤT BẠI", "DEFEAT";
     ImgResult: "KẾT QUẢ", "RESULT";
@@ -267,9 +266,10 @@ catalog! {
     PreviewPost: "**Xem trước bảng điểm từ một trận đấu thật.** Không khởi động gateway hay LLM.", "**Scoreboard preview from a real match.** No gateway session or LLM was started.";
     ImgMvp: "MVP", "MVP";
     ImgWorst: "CHƠI TỆ", "WORST";
+    ImgTotalKills: "Tổng hạ gục", "Total kills";
+    ImgTotalGold: "Tổng vàng", "Total gold";
     ImgDamage: "SÁT THƯƠNG", "DAMAGE";
     ImgTaken: "NHẬN VÀO", "TAKEN";
-    ImgGold: "VÀNG", "GOLD";
     ImgVision: "TẦM NHÌN", "VISION";
     ImgItems: "TRANG BỊ", "ITEMS";
     ImgDateFormat: "%d/%m/%Y  ·  %H:%M %Z", "%d %b %Y  ·  %H:%M %Z";

@@ -77,6 +77,14 @@ pub struct Participant {
     #[serde(default)]
     pub team_help: i64,
     pub items: Vec<i64>,
+    #[serde(default)]
+    pub spells: Vec<i64>,
+    #[serde(default)]
+    pub runes: Vec<i64>,
+    #[serde(default)]
+    pub wards: i64,
+    #[serde(default)]
+    pub control_wards: i64,
     pub rank_before: Option<Rank>,
     pub rank_after: Option<Rank>,
     pub lp_delta: Option<i64>,
@@ -118,6 +126,9 @@ impl Match {
                 objective_damage: n(v, "damageDealtToObjectives"), cc_time: n(v, "timeCCingOthers"),
                 team_help: n(v, "totalHealsOnTeammates") + n(v, "totalDamageShieldedOnTeammates"),
                 items: (0..7).map(|i| n(v, &format!("item{i}"))).collect(),
+                spells: vec![n(v, "summoner1Id"), n(v, "summoner2Id")],
+                runes: vec![v.pointer("/perks/styles/0/selections/0/perk").and_then(Value::as_i64).unwrap_or(0), v.pointer("/perks/styles/1/style").and_then(Value::as_i64).unwrap_or(0)],
+                wards: n(v, "wardsPlaced"), control_wards: n(v, "visionWardsBoughtInGame"),
                 ..Default::default()
             }
         }).collect();
