@@ -1,0 +1,447 @@
+use crate::{App, i18n::{Lang, Msg}, model::{Match, Notice, now}, presentation as view, render, reports, tracker};
+use anyhow::{Result, bail, ensure};
+use serenity::{all::*, async_trait};
+use std::{fmt, sync::Arc, time::Duration};
+use tokio::{sync::Semaphore, time::sleep};
+use tracing::{info, warn};
+
+pub struct Handler { pub app: Arc<App>, pub slots: Semaphore }
+fn mentions() -> CreateAllowedMentions { CreateAllowedMentions::new().all_users(false).all_roles(false).everyone(false).replied_user(false) }
+fn buttons(id: &str, lang: Lang) -> Vec<CreateActionRow> {
+    vec![CreateActionRow::Buttons([
+        ("damage", Msg::BtnDamage), ("gold", Msg::BtnGold), ("events", Msg::BtnEvents), ("scoreboard", Msg::BtnScoreboard), ("items", Msg::BtnItems),
+    ].into_iter().map(|(action, label)| CreateButton::new(format!("lol:{action}:{id}")).label(lang.t(label)).style(ButtonStyle::Secondary)).collect())]
+}
+fn embed(m: &Match, lang: Lang) -> CreateEmbed {
+    CreateEmbed::new().title(view::limit(&view::result_title(m, lang), 240)).description(view::limit(&view::scoreboard(m, lang), 3500)).color(0x3498db)
+        .footer(CreateEmbedFooter::new(lang.t(Msg::FooterText)))
+}
+fn image_embed(game: &Match, lang: Lang) -> CreateEmbed {
+    CreateEmbed::new().title(view::result_title(game, lang)).color(0x3498db)
+        .image("attachment://scoreboard.png")
+        .footer(CreateEmbedFooter::new(lang.t(Msg::FooterImage)))
+}
+async fn scoreboard_image(app: &App, game: &Match) -> Option<Vec<u8>> {
+    match render::png(app, game.clone(), app.cfg.language, false).await {
+        Ok(image) => Some(image),
+        Err(error) => { warn!(%error, "PNG unavailable; retaining text scoreboard fallback"); None }
+    }
+}
+fn missing(error: &serenity::Error) -> bool {
+    matches!(error, serenity::Error::Http(HttpError::UnsuccessfulRequest(r)) if r.status_code.as_u16() == 404)
+}
+fn safe_http<T>(value: serenity::Result<T>) -> Result<T> { value.map_err(|_| anyhow::anyhow!("Discord request failed; check token, permissions and connectivity")) }
+
+/// An already-localized message meant for the invoking member. Any other error is logged and
+/// replaced by a generic localized message, so internal details never reach Discord.
+#[derive(Debug)]
+struct Denied(String);
+impl fmt::Display for Denied { fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { f.write_str(&self.0) } }
+impl std::error::Error for Denied {}
+fn deny(text: impl Into<String>) -> anyhow::Error { anyhow::Error::new(Denied(text.into())) }
+fn reply_error(error: &anyhow::Error, lang: Lang, fallback: Msg) -> String {
+    match error.downcast_ref::<Denied>() {
+        Some(denied) => denied.0.clone(),
+        None => { warn!(%error, "Discord interaction failed"); lang.t(fallback).into() }
+    }
+}
+
+#[async_trait]
+impl EventHandler for Handler {
+    async fn ready(&self, _: Context, _: Ready) { info!("Discord gateway ready"); }
+    async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
+        let lang = self.app.cfg.language;
+        match interaction {
+            Interaction::Command(cmd) => {
+                if cmd.guild_id.map(|g| g.get()) != Some(self.app.cfg.discord.guild_id) {
+                    let _ = cmd.create_response(&ctx.http, CreateInteractionResponse::Message(CreateInteractionResponseMessage::new().content(lang.t(Msg::WrongGuild)).ephemeral(true).allowed_mentions(mentions()))).await;
+                    return;
+                }
+                // Results and ranks are meant for the group (as in the original bot); settings stay private.
+                let public = matches!(cmd.data.name.as_str(), "lastgame" | "rank");
+                let deferred = if public { cmd.defer(&ctx.http).await } else { cmd.defer_ephemeral(&ctx.http).await };
+                if deferred.is_err() { return; }
+                let Ok(_slot) = self.slots.try_acquire() else {
+                    let _ = cmd.edit_response(&ctx.http, EditInteractionResponse::new().content(lang.t(Msg::Busy)).allowed_mentions(mentions())).await; return;
+                };
+                let builder = match self.command(&cmd, &ctx.http).await {
+                    Ok(reply) => reply.builder(lang),
+                    Err(error) => EditInteractionResponse::new().content(reply_error(&error, lang, Msg::CommandFailed)).allowed_mentions(mentions()),
+                };
+                if cmd.edit_response(&ctx.http, builder).await.is_err() { warn!("Could not complete Discord command response"); }
+            }
+            Interaction::Component(component) => {
+                if component.guild_id.map(|g| g.get()) != Some(self.app.cfg.discord.guild_id) { return; }
+                if component.create_response(&ctx.http, CreateInteractionResponse::Defer(CreateInteractionResponseMessage::new().ephemeral(true))).await.is_err() { return; }
+                let Ok(_slot) = self.slots.try_acquire() else {
+                    let _ = component.edit_response(&ctx.http, EditInteractionResponse::new().content(lang.t(Msg::Busy))).await; return;
+                };
+                let builder = match self.component(&component.data.custom_id).await {
+                    Ok(reply) => reply.builder(lang),
+                    Err(error) => EditInteractionResponse::new().content(reply_error(&error, lang, Msg::ButtonUnavailable)).allowed_mentions(mentions()),
+                };
+                if component.edit_response(&ctx.http, builder).await.is_err() { warn!("Could not complete result-button response"); }
+            }
+            Interaction::Autocomplete(cmd) => {
+                if cmd.guild_id.map(|g| g.get()) != Some(self.app.cfg.discord.guild_id) { return; }
+                let admin = cmd.member.as_ref().and_then(|m| m.permissions).is_some_and(|p| p.administrator());
+                let mut response = CreateAutocompleteResponse::new();
+                if let (true, Some(focused)) = (admin, cmd.data.autocomplete()) {
+                    let query = focused.value.to_lowercase();
+                    for id in self.app.store.players().unwrap_or_default().iter().map(|p| p.riot_id()).filter(|id| id.to_lowercase().contains(&query)).take(25) {
+                        response = response.add_string_choice(id.clone(), id);
+                    }
+                }
+                let _ = cmd.create_response(&ctx.http, CreateInteractionResponse::Autocomplete(response)).await;
+            }
+            _ => (),
+        }
+    }
+}
+struct Reply { text: String, file: Option<(String, Vec<u8>)>, game: Option<Match> }
+impl Reply {
+    fn text(text: impl Into<String>) -> Self { Self { text: text.into(), file: None, game: None } }
+    fn file(name: &str, data: impl Into<Vec<u8>>) -> Self { Self { text: String::new(), file: Some((name.into(), data.into())), game: None } }
+    fn builder(self, lang: Lang) -> EditInteractionResponse {
+        let mut builder = EditInteractionResponse::new().allowed_mentions(mentions());
+        if self.text.is_empty() && self.file.is_none() && self.game.is_none() {
+            return builder.content(lang.t(Msg::NoData));
+        }
+        if self.text.encode_utf16().count() > 1900 {
+            builder = builder.content(lang.t(Msg::FullAttached)).new_attachment(CreateAttachment::bytes(self.text.into_bytes(), "response.txt"));
+        } else { builder = builder.content(self.text); }
+        if let Some((name, data)) = self.file { builder = builder.new_attachment(CreateAttachment::bytes(data, name)); }
+        // Image attachments display inline; buttons retain the complete text/data views.
+        if let Some(game) = self.game { builder = builder.components(buttons(&game.id, lang)); }
+        builder
+    }
+}
+impl Handler {
+    async fn command(&self, cmd: &CommandInteraction, http: &Http) -> Result<Reply> {
+        let lang = self.app.cfg.language;
+        let opts = &cmd.data.options;
+        match cmd.data.name.as_str() {
+            "lastgame" => {
+                let Some(game) = self.app.store.get_match(None)? else { return Ok(Reply::text(lang.t(Msg::NoGames))); };
+                let mut reply = Reply::file("scoreboard.txt", view::scoreboard(&game, lang));
+                if let Some(image) = scoreboard_image(&self.app, &game).await { reply.file = Some(("scoreboard.png".into(), image)); }
+                reply.text = self.app.store.setting(&format!("commentary/{}", game.id))?.unwrap_or_else(|| view::commentary(&game, lang));
+                reply.game = Some(game);
+                Ok(reply)
+            }
+            "players" => {
+                let players = self.app.store.players()?;
+                let lines: Vec<String> = players.iter().enumerate().map(|(i, p)| format!("{}. {} · {}", i + 1, view::plain(p.name()), view::plain(&p.riot_id()))).collect();
+                Ok(Reply::text(format!("{}\n{}", lang.f(Msg::RosterTitle, &[&players.len()]), lines.join("\n"))))
+            }
+            "rank" => {
+                let mut lines = Vec::new();
+                for player in self.app.store.players()? {
+                    if player.puuid.is_empty() { lines.push(format!("{} · {}", view::plain(player.name()), lang.t(Msg::AccountUnresolved))); continue; }
+                    let text = match self.app.riot.ranks(&player.puuid).await {
+                        Ok(ranks) => {
+                            for rank in &ranks { self.app.store.snapshot(&player.puuid, rank, now())?; }
+                            if ranks.is_empty() { lang.t(Msg::Unranked).into() }
+                            else { ranks.iter().map(|r| format!("{}: {}", lang.queue(r.queue), lang.rank(r))).collect::<Vec<_>>().join(" · ") }
+                        }
+                        Err(_) => lang.t(Msg::RankUnavailable).into(),
+                    };
+                    lines.push(format!("{} — {text}", view::plain(player.name())));
+                }
+                Ok(Reply::text(lines.join("\n")))
+            }
+            "config" => {
+                let permissions = cmd.member.as_ref().and_then(|m| m.permissions).unwrap_or_else(Permissions::empty);
+                if !(permissions.administrator() || permissions.manage_guild()) { return Err(deny(lang.t(Msg::ManageServerRequired))); }
+                let sub = opts.first().ok_or_else(|| anyhow::anyhow!("Missing subcommand"))?;
+                let CommandDataOptionValue::SubCommand(opts) = &sub.value else { bail!("Invalid subcommand"); };
+                let guild = self.app.cfg.discord.guild_id;
+                match sub.name.as_str() {
+                    "channel" => {
+                        let channel = channel_opt(opts).ok_or_else(|| anyhow::anyhow!("Channel option missing"))?;
+                        validate_channel(http, guild, channel).await.map_err(|p| deny(p.message(lang)))?;
+                        self.app.store.set("channel_games", &channel.to_string())?;
+                        Ok(Reply::text(lang.f(Msg::ChannelSet, &[&format!("<#{channel}>")])))
+                    }
+                    "rankchannel" => {
+                        if let Some(channel) = channel_opt(opts) {
+                            validate_channel(http, guild, channel).await.map_err(|p| deny(p.message(lang)))?;
+                            self.app.store.set("channel_rank", &channel.to_string())?;
+                        }
+                        if let Some(enabled) = opts.iter().find_map(|o| if let CommandDataOptionValue::Boolean(v) = o.value { Some(v) } else { None }) {
+                            self.app.store.set("rank_enabled", if enabled { "1" } else { "0" })?;
+                        }
+                        let enabled = self.app.store.setting("rank_enabled")?.map(|v| v == "1").unwrap_or(self.app.cfg.reports.enabled);
+                        let channel = match self.app.channel(true)? { 0 => lang.t(Msg::NotSet).to_owned(), id => format!("<#{id}>") };
+                        Ok(Reply::text(lang.f(Msg::ReportStatus, &[&lang.t(if enabled { Msg::Enabled } else { Msg::Disabled }), &channel])))
+                    }
+                    "addplayer" => {
+                        if !permissions.administrator() { return Err(deny(lang.t(Msg::AdminRequired))); }
+                        let mut player = tracker::parse_player(str_opt(opts, "riot_id").unwrap_or(""), str_opt(opts, "nickname").unwrap_or(""))
+                            .map_err(|_| deny(lang.t(Msg::BadRiotId)))?;
+                        let roster = self.app.store.players()?;
+                        if roster.len() >= 100 { return Err(deny(lang.t(Msg::RosterFull))); }
+                        if roster.iter().any(|p| p.riot_id().to_lowercase() == player.riot_id().to_lowercase()) { return Err(deny(lang.t(Msg::PlayerExists))); }
+                        let riot = |error: anyhow::Error| { warn!(%error, "Riot lookup for a new player failed"); deny(lang.t(Msg::RiotUnavailable)) };
+                        player.puuid = self.app.riot.resolve(&player).await.map_err(riot)?.ok_or_else(|| deny(lang.t(Msg::PlayerNotFound)))?;
+                        if roster.iter().any(|p| p.puuid == player.puuid) { return Err(deny(lang.t(Msg::PlayerExists))); }
+                        // Baseline before adding, to avoid replaying pre-subscription games.
+                        let ids = self.app.riot.history(&player.puuid, self.app.cfg.riot.history_count).await.map_err(riot)?;
+                        self.app.store.add_player(&player)?;
+                        self.app.store.baseline(&player, &ids)?;
+                        // An immediate snapshot gives the first game and report a known LP baseline.
+                        match self.app.riot.ranks(&player.puuid).await {
+                            Ok(ranks) => for rank in &ranks { self.app.store.snapshot(&player.puuid, rank, now())?; },
+                            Err(error) => warn!(%error, "Initial rank snapshot unavailable; next refresh will retry"),
+                        }
+                        Ok(Reply::text(lang.f(Msg::PlayerAdded, &[&view::plain(&player.riot_id()), &(roster.len() + 1)])))
+                    }
+                    "removeplayer" => {
+                        if !permissions.administrator() { return Err(deny(lang.t(Msg::AdminRequired))); }
+                        let id = str_opt(opts, "riot_id").unwrap_or("");
+                        if !self.app.store.remove_player(id)? { return Err(deny(lang.t(Msg::PlayerNotTracked))); }
+                        Ok(Reply::text(lang.f(Msg::PlayerRemoved, &[&view::plain(id.trim()), &self.app.store.players()?.len()])))
+                    }
+                    "rankreport" => {
+                        let period = str_opt(opts, "period").and_then(reports::Period::parse).unwrap_or(reports::Period::Daily);
+                        if self.app.channel(true)? == 0 { return Err(deny(lang.t(Msg::RankChannelMissing))); }
+                        reports::refresh_ranks(&self.app).await?;
+                        if let Some(report) = reports::build(&self.app, period)? {
+                            self.app.store.queue_report(&format!("manual/{}", cmd.id.get()), &reports::notice(report, lang))?;
+                            Ok(Reply::text(lang.t(Msg::ReportQueued)))
+                        } else { Ok(Reply::text(lang.t(Msg::NoGamesInPeriod))) }
+                    }
+                    _ => bail!("Unknown configuration command"),
+                }
+            }
+            _ => bail!("Unknown command"),
+        }
+    }
+    async fn component(&self, custom_id: &str) -> Result<Reply> {
+        let mut parts = custom_id.split(':');
+        ensure!(parts.next() == Some("lol"), "Invalid button");
+        let action = parts.next().unwrap_or(""); let id = parts.next().unwrap_or("");
+        ensure!(parts.next().is_none() && id.len() < 80 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'), "Invalid match ID");
+        let game = self.app.store.get_match(Some(id))?.ok_or_else(|| anyhow::anyhow!("Match expired"))?;
+        let lang = self.app.cfg.language;
+        Ok(match action {
+            "damage" => {
+                let chart_game = game.clone();
+                match render::blocking(move || render::damage_chart(&chart_game, lang)).await {
+                    Ok(png) => Reply::file("damage.png", png),
+                    Err(error) => { warn!(%error, "Damage chart unavailable; sending CSV"); Reply::file("damage.csv", view::damage_csv(&game)) }
+                }
+            }
+            "scoreboard" => Reply::file("scoreboard.txt", view::scoreboard(&game, lang)),
+            "items" => Reply::file("items.csv", view::items_csv(&game)),
+            "gold" | "events" => {
+                let timeline = tracker::timeline(&self.app, id).await?.ok_or_else(|| anyhow::anyhow!("Timeline unavailable"))?;
+                if action == "events" { return Ok(Reply::text(view::events(&game, &timeline, lang))); }
+                let (chart_game, chart_timeline) = (game.clone(), timeline.clone());
+                match render::blocking(move || render::gold_chart(&chart_game, &chart_timeline, lang)).await {
+                    Ok(png) => Reply::file("gold.png", png),
+                    Err(error) => { warn!(%error, "Gold chart unavailable; sending CSV"); Reply::file("gold.csv", view::gold_csv(&game, &timeline)) }
+                }
+            }
+            _ => bail!("Unknown button"),
+        })
+    }
+}
+fn str_opt<'a>(opts: &'a [CommandDataOption], name: &str) -> Option<&'a str> {
+    opts.iter().find(|o| o.name == name).and_then(|o| if let CommandDataOptionValue::String(s) = &o.value { Some(s.as_str()) } else { None })
+}
+fn channel_opt(opts: &[CommandDataOption]) -> Option<u64> {
+    opts.iter().find_map(|o| if let CommandDataOptionValue::Channel(c) = o.value { Some(c.get()) } else { None })
+}
+
+/// Why a channel cannot receive tracker messages. `Display` is English for logs.
+pub enum ChannelProblem { Unreachable, NotText, MissingPermissions(Permissions) }
+const REQUIRED: [(Permissions, Msg); 4] = [
+    (Permissions::VIEW_CHANNEL, Msg::PermViewChannel), (Permissions::SEND_MESSAGES, Msg::PermSendMessages),
+    (Permissions::EMBED_LINKS, Msg::PermEmbedLinks), (Permissions::ATTACH_FILES, Msg::PermAttachFiles),
+];
+impl ChannelProblem {
+    fn message(&self, lang: Lang) -> String {
+        match self {
+            Self::Unreachable => lang.t(Msg::ChannelUnreachable).into(),
+            Self::NotText => lang.t(Msg::ChannelNotText).into(),
+            Self::MissingPermissions(missing) => {
+                let names: Vec<&str> = REQUIRED.iter().filter(|(p, _)| missing.contains(*p)).map(|(_, m)| lang.t(*m)).collect();
+                lang.f(Msg::ChannelMissingPerms, &[&names.join(", ")])
+            }
+        }
+    }
+}
+impl fmt::Display for ChannelProblem {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result { f.write_str(&self.message(Lang::En)) }
+}
+pub async fn validate_channel(http: &Http, guild: u64, id: u64) -> Result<(), ChannelProblem> {
+    let reachable = |_| ChannelProblem::Unreachable;
+    let Channel::Guild(channel) = ChannelId::new(id).to_channel(http).await.map_err(reachable)? else { return Err(ChannelProblem::NotText); };
+    if channel.guild_id.get() != guild || !matches!(channel.kind, ChannelType::Text | ChannelType::News) { return Err(ChannelProblem::NotText); }
+    // Catch missing channel permissions now rather than as endless delivery retries.
+    let me = http.get_current_user().await.map_err(reachable)?.id;
+    let server = http.get_guild(GuildId::new(guild)).await.map_err(reachable)?;
+    let member = server.id.member(http, me).await.map_err(reachable)?;
+    let required = REQUIRED.iter().fold(Permissions::empty(), |all, (p, _)| all | *p);
+    let missing = required - server.user_permissions_in(&channel, &member);
+    if missing.is_empty() { Ok(()) } else { Err(ChannelProblem::MissingPermissions(missing)) }
+}
+pub async fn validate_channels(app: &App, http: &Http) -> Result<()> {
+    for channel in [app.channel(false)?, app.channel(true)?] {
+        if channel != 0 { validate_channel(http, app.cfg.discord.guild_id, channel).await.map_err(|p| anyhow::anyhow!("Configured channel unusable: {p}"))?; }
+    }
+    Ok(())
+}
+
+/// English is Discord's default text; other languages are added as client-locale localizations.
+fn localize<T>(builder: T, msg: Msg, set: impl Fn(T, &'static str, &'static str) -> T) -> T {
+    Lang::ALL.into_iter().filter(|l| *l != Lang::En).fold(builder, |b, lang| set(b, lang.discord_locale(), lang.t(msg)))
+}
+fn command(name: &str, msg: Msg) -> CreateCommand {
+    localize(CreateCommand::new(name).description(Lang::En.t(msg)).dm_permission(false), msg, |b, locale, text| b.description_localized(locale, text))
+}
+fn option(kind: CommandOptionType, name: &str, msg: Msg) -> CreateCommandOption {
+    localize(CreateCommandOption::new(kind, name, Lang::En.t(msg)), msg, |b, locale, text| b.description_localized(locale, text))
+}
+fn choice(option: CreateCommandOption, value: &str, msg: Msg) -> CreateCommandOption {
+    let locales: Vec<_> = Lang::ALL.into_iter().filter(|l| *l != Lang::En).map(|l| (l.discord_locale(), l.t(msg))).collect();
+    option.add_string_choice_localized(Lang::En.t(msg), value, locales)
+}
+pub async fn register(http: &Http, guild: u64) -> Result<()> {
+    use CommandOptionType::{Boolean, Channel, String as Text, SubCommand};
+    let channel = || option(Channel, "channel", Msg::OptChannel).channel_types(vec![ChannelType::Text, ChannelType::News]);
+    let riot_id = || option(Text, "riot_id", Msg::OptRiotId).required(true).max_length(90);
+    let period = choice(choice(choice(option(Text, "period", Msg::OptPeriod).required(true), "daily", Msg::ChoiceDaily), "weekly", Msg::ChoiceWeekly), "monthly", Msg::ChoiceMonthly);
+    let config = command("config", Msg::CmdConfig).default_member_permissions(Permissions::MANAGE_GUILD)
+        .add_option(option(SubCommand, "channel", Msg::CmdChannel).add_sub_option(channel().required(true)))
+        .add_option(option(SubCommand, "rankchannel", Msg::CmdRankchannel).add_sub_option(option(Boolean, "enabled", Msg::OptEnabled)).add_sub_option(channel()))
+        .add_option(option(SubCommand, "addplayer", Msg::CmdAddplayer).add_sub_option(riot_id()).add_sub_option(option(Text, "nickname", Msg::OptNickname).max_length(64)))
+        .add_option(option(SubCommand, "removeplayer", Msg::CmdRemoveplayer).add_sub_option(riot_id().set_autocomplete(true)))
+        .add_option(option(SubCommand, "rankreport", Msg::CmdRankreport).add_sub_option(period));
+    for command in [command("lastgame", Msg::CmdLastgame), command("rank", Msg::CmdRank), command("players", Msg::CmdPlayers), config] {
+        safe_http(GuildId::new(guild).create_command(http, command).await)?;
+    }
+    info!("Guild tracker commands installed; unrelated commands were not cleared");
+    Ok(())
+}
+
+pub async fn delivery_worker(app: Arc<App>, http: Arc<Http>) -> Result<()> {
+    loop {
+        if let Some(delivery) = app.store.next_delivery()? {
+            if deliver(&app, &http, &delivery).await.is_err() {
+                warn!("Discord delivery failed; retained for retry");
+                app.store.defer_delivery(delivery.id)?;
+            }
+        } else { sleep(Duration::from_secs(2)).await; }
+    }
+}
+async fn deliver(app: &App, http: &Http, delivery: &crate::store::Delivery) -> Result<()> {
+    let lang = app.cfg.language;
+    // A delayed start/timeout must never overwrite an already persisted result.
+    match &delivery.notice {
+        Notice::Start(game) if app.store.seen(&game.id)? || !app.store.pending()?.iter().any(|p| p.id == game.id) => {
+            app.store.ack(delivery.id, None)?; return Ok(());
+        }
+        Notice::Timeout { id } if app.store.seen(id)? => {
+            app.store.ack(delivery.id, None)?; return Ok(());
+        }
+        _ => (),
+    }
+    let (game_id, finished, text, result) = match &delivery.notice {
+        Notice::Start(game) => (Some(game.id.as_str()), false, view::limit(&view::start(game, lang), 1900), None),
+        Notice::Result(m) => (Some(m.id.as_str()), true, view::commentary(m, lang), Some(m)),
+        Notice::Timeout { id } => (Some(id.as_str()), true, lang.t(Msg::ResultUnavailable).into(), None),
+        Notice::Report { text, report } => {
+            let channel = app.channel(true)?; ensure!(channel != 0, "Rank channel missing");
+            // The card is rendered at delivery, like result scoreboards; text is the fallback.
+            let card = match report {
+                Some(report) => match crate::report_card::png(app, report.clone(), lang).await {
+                    Ok(png) => Some((report.title(lang), report.range(lang), png)),
+                    Err(error) => { warn!(%error, "Report card unavailable; sending text"); None }
+                },
+                None => None,
+            };
+            let builder = match card {
+                Some((title, range, png)) => CreateMessage::new().content(format!("**{title}** · {range}")).add_file(CreateAttachment::bytes(png, "report.png")),
+                None if text.encode_utf16().count() <= 1900 => CreateMessage::new().content(text),
+                None => CreateMessage::new().content(lang.t(Msg::ReportAttached)).add_file(CreateAttachment::bytes(text.as_bytes(), "report.txt")),
+            };
+            safe_http(ChannelId::new(channel).send_message(http, builder.allowed_mentions(mentions())).await)?;
+            app.store.ack(delivery.id, None)?;
+            return Ok(());
+        }
+    };
+    let png = if let Some(game) = result { scoreboard_image(app, game).await } else { None };
+    if let Some(id) = game_id
+        && finished
+            && let Some((channel, message)) = app.store.message(id)? {
+                let mut edit = EditMessage::new().content(&text).allowed_mentions(mentions()).components(vec![]).attachments(EditAttachments::new());
+                if let Some(m) = result {
+                    edit = edit.components(buttons(id, lang));
+                    if let Some(image) = &png {
+                        edit = edit.embed(image_embed(m, lang)).new_attachment(CreateAttachment::bytes(image.clone(), "scoreboard.png"));
+                    } else { edit = edit.embed(embed(m, lang)); }
+                }
+                match ChannelId::new(channel).edit_message(http, MessageId::new(message), edit).await {
+                    Ok(_) => { app.store.ack(delivery.id, Some((id, channel, message, true)))?; return Ok(()); }
+                    Err(error) if missing(&error) => (), // Only a definite deletion permits a new message.
+                    Err(_) => bail!("Discord edit failed"),
+                }
+            }
+    let channel = app.channel(false)?; ensure!(channel != 0, "Game channel missing");
+    let mut create = CreateMessage::new().content(text).allowed_mentions(mentions());
+    if let Some(m) = result {
+        create = create.components(buttons(&m.id, lang));
+        if let Some(image) = png {
+            create = create.embed(image_embed(m, lang)).add_file(CreateAttachment::bytes(image, "scoreboard.png"));
+        } else { create = create.embed(embed(m, lang)); }
+    }
+    let message = safe_http(ChannelId::new(channel).send_message(http, create).await)?;
+    app.store.ack(delivery.id, game_id.map(|id| (id, channel, message.id.get(), finished)))?;
+    Ok(())
+}
+
+pub async fn commentary_worker(app: Arc<App>, http: Arc<Http>) -> Result<()> {
+    let Some(llm) = &app.llm else { std::future::pending::<()>().await; return Ok(()); };
+    loop {
+        if let Some(game) = app.store.next_commentary()? {
+            let text = llm.enhance(&game, app.cfg.language).await.map(|ai| {
+                // Keep the factual summary when both fit in one message; AI text only enhances it.
+                let combined = format!("{}\n\n{ai}", view::commentary(&game, app.cfg.language));
+                if combined.encode_utf16().count() <= 2000 { combined } else { view::limit(&ai, 2000) }
+            });
+            if let Err(error) = &text { warn!(%error, "Optional LLM commentary unavailable"); }
+            if let Ok(text) = text {
+                if let Some((channel, message)) = app.store.message(&game.id)? {
+                    // Only content changes. The factual scoreboard and its buttons stay intact.
+                    if ChannelId::new(channel).edit_message(&http, MessageId::new(message), EditMessage::new().content(&text).allowed_mentions(mentions())).await.is_ok() {
+                        app.store.commentary_done(&game.id, Some(&text))?;
+                    } else { app.store.commentary_done(&game.id, None)?; warn!("Optional commentary edit failed; factual result retained"); }
+                } else { app.store.commentary_done(&game.id, None)?; }
+            } else { app.store.commentary_done(&game.id, None)?; }
+        } else { sleep(Duration::from_secs(5)).await; }
+    }
+}
+
+/// Explicit one-message preview; never starts a gateway or drains the outbox.
+pub async fn post_preview(app: &App, token: &str, image: Vec<u8>, lang: Lang) -> Result<()> {
+    let channel = app.channel(false)?;
+    ensure!(channel != 0, "Configure a game channel before posting a preview");
+    let http = Http::new(token);
+    validate_channel(&http, app.cfg.discord.guild_id, channel).await.map_err(|p| anyhow::anyhow!("Preview channel unusable: {p}"))?;
+    let message = safe_http(ChannelId::new(channel).send_message(&http, CreateMessage::new()
+        .content(lang.t(Msg::PreviewPost))
+        .add_file(CreateAttachment::bytes(image, "scoreboard.png"))
+        .allowed_mentions(mentions())).await)?;
+    info!(message_id = message.id.get(), "Posted one scoreboard preview; no gateway started");
+    Ok(())
+}
+
+pub async fn probe(token: &str) -> Result<()> {
+    if token.is_empty() { return Ok(()); }
+    // REST read only: no gateway, application-command writes or messages.
+    safe_http(Http::new(token).get_current_user().await)?;
+    info!("Discord credentials accepted (read-only probe)");
+    Ok(())
+}

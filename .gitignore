@@ -1,0 +1,15 @@
+/target/
+.env
+.env.*
+!.env.example
+/config.toml
+/players.json
+/private/
+/legacy/
+/data/
+*.db
+*.db-*
+*.sqlite*
+*.log
+*.pem
+*.key

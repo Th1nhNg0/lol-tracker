@@ -1,0 +1,38 @@
+# Relative paths are resolved against this config file's directory.
+players_file = "players.json" # Seeds a NEW database once; afterwards /config addplayer|removeplayer is authoritative.
+database = "data/tracker.db"
+language = "vi" # vi or en
+retention_days = 180
+
+[riot]
+platform = "vn2"
+# Spectator adds ~1 request per player every spectator_interval_secs. With a development key
+# (100 requests / 2 min) keep it off for rosters above a few players, or raise the interval.
+spectator = false
+history_interval_secs = 60
+spectator_interval_secs = 15
+catch_up_hours = 3
+# Up to 100 recent matches per player per sweep; bounds recovery after downtime.
+history_count = 20
+# Minimum spacing between Riot API requests. 1250 ms fits a development key's 100 requests / 2 min;
+# lower it for a production key.
+request_interval_ms = 1250
+
+[discord]
+guild_id = 0 # Required for Discord mode. One guild per process.
+games_channel_id = 0
+rank_channel_id = 0 # Zero disables reports until configured.
+
+[reports]
+enabled = true
+monthly = true # Calendar-month report on the last day of each month.
+timezone = "Asia/Ho_Chi_Minh"
+hour = 23
+minute = 59
+
+[llm]
+enabled = false
+provider = "openrouter" # Descriptive label only; every provider uses the same OpenAI-compatible HTTP contract.
+model = ""              # e.g. a model ID available to your OpenRouter/OpenAI account, or a local model name
+base_url = "https://openrouter.ai/api/v1" # API root; "/chat/completions" is appended. http:// only for localhost.
+timeout_secs = 15
