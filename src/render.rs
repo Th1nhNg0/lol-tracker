@@ -1,5 +1,5 @@
 //! Independently authored Rust scoreboard with public Data Dragon artwork.
-use crate::{App, i18n::{Lang, Msg}, model::{Match, Participant, n}, presentation::{self, Badge, plain}, render_assets::{Assets, Wanted}};
+use crate::{App, i18n::{Lang, Msg}, model::{Match, Participant}, presentation::{self, Badge, plain}, render_assets::{Assets, Wanted}};
 use anyhow::{Result, ensure};
 use resvg::usvg::fontdb;
 use serde_json::Value;
@@ -150,101 +150,6 @@ pub(crate) fn rasterize(svg: &str, width: u32, height: u32) -> Result<Vec<u8>> {
     resvg::render(&tree, resvg::tiny_skia::Transform::identity(), &mut pixmap.as_mut());
     pixmap.encode_png().map_err(|_| anyhow::anyhow!("Cannot encode PNG"))
 }
-fn chart_canvas(width: u32, height: u32, title: &str) -> Canvas {
-    let mut cv = Canvas { clips: 0, svg: format!("<svg xmlns='http://www.w3.org/2000/svg' width='{width}' height='{height}'><g font-family='Be Vietnam Pro,DejaVu Sans,sans-serif'>") };
-    cv.rect(0, 0, width, height, 0, "#0b1220");
-    cv.text(32, 44, 22, TEXT, 700, "start", title);
-    cv
-}
-
-const PHYSICAL: &str = "#f4a259";
-const MAGIC: &str = "#a78bfa";
-const TRUE_DAMAGE: &str = "#e8ecf3";
-
-/// Champion damage per player, split into physical/magic/true, grouped by team.
-pub fn damage_chart(game: &Match, lang: Lang) -> Result<Vec<u8>> {
-    ensure!(!game.participants.is_empty() && game.participants.len() <= 32, "Unsupported chart size");
-    let mut rows: Vec<&Participant> = game.participants.iter().collect();
-    rows.sort_by_key(|p| (p.team, -p.damage));
-    let (width, top, row) = (1000, 96, 40);
-    let height = top + rows.len() as u32 * row + 40;
-    let mut cv = chart_canvas(width, height, &format!("{} · {}", lang.t(Msg::ChartDamageTitle), lang.queue(game.queue)));
-    for (i, (color, label)) in [(PHYSICAL, lang.t(Msg::ChartPhysical)), (MAGIC, lang.t(Msg::ChartMagic)), (TRUE_DAMAGE, lang.t(Msg::ChartTrue))].iter().enumerate() {
-        let x = 32 + i as u32 * 130;
-        cv.rect(x, 62, 14, 14, 3, color);
-        cv.text(x + 22, 74, 13, DIM, 400, "start", label);
-    }
-    let best = rows.iter().map(|p| p.damage).max().unwrap_or(0).max(1) as f64;
-    let (bar_x, bar_w) = (330.0, 560.0);
-    for (i, p) in rows.iter().enumerate() {
-        let y = top + i as u32 * row;
-        if i > 0 && rows[i - 1].team != p.team { cv.rect(32, y - 3, width - 64, 1, 0, "#2c3a50"); }
-        // The bundled font has no star glyph; mark tracked players with a dot instead.
-        if p.tracked { cv.rect(32, y + 15, 10, 10, 5, GOLD); }
-        let name = short(&p.name, 18);
-        cv.text(50, y + 25, 15, color(p.team), if p.tracked { 700 } else { 400 }, "start", &name);
-        cv.text(320, y + 25, 13, DIM, 400, "end", &short(&p.champion, 14));
-        let mut x = bar_x;
-        for (value, fill) in [(p.physical, PHYSICAL), (p.magic, MAGIC), (p.true_damage, TRUE_DAMAGE)] {
-            let w = (value.max(0) as f64 / best * bar_w).round();
-            if w >= 1.0 { cv.rect(x as u32, y + 10, w as u32, 20, 3, fill); }
-            x += w;
-        }
-        cv.text(x as u32 + 8, y + 25, 14, TEXT, 700, "start", &number(p.damage));
-    }
-    cv.svg.push_str("</g></svg>");
-    rasterize(&cv.svg, width, height)
-}
-
-/// Blue-minus-red team gold over time from the Match-V5 timeline.
-pub fn gold_chart(game: &Match, timeline: &Value, lang: Lang) -> Result<Vec<u8>> {
-    let teams: HashSet<u16> = game.participants.iter().map(|p| p.team).collect();
-    ensure!(teams == HashSet::from([100, 200]), "Gold chart needs two standard teams");
-    let points: Vec<(f64, i64)> = timeline["info"]["frames"].as_array().into_iter().flatten().map(|frame| {
-        let diff = game.participants.iter().map(|p| {
-            let gold = n(&frame["participantFrames"][p.id.to_string()], "totalGold");
-            if p.team == 100 { gold } else { -gold }
-        }).sum();
-        (n(frame, "timestamp") as f64 / 60000.0, diff)
-    }).collect();
-    ensure!(points.len() >= 2, "Timeline has too few frames");
-    let (width, height) = (1000u32, 480u32);
-    let (left, right, top, bottom) = (90.0, 960.0, 90.0, 430.0);
-    let span = points.iter().map(|(_, d)| d.abs()).max().unwrap_or(0).max(1000);
-    let span = ((span + 999) / 1000 * 1000) as f64;
-    let minutes = points.last().map_or(1.0, |(t, _)| t.max(1.0));
-    let x = |t: f64| left + t / minutes * (right - left);
-    let y = |d: f64| top + (span - d) / (2.0 * span) * (bottom - top);
-    let zero = y(0.0);
-    let tracked: Vec<u16> = game.participants.iter().filter(|p| p.tracked).map(|p| p.team).collect();
-    let note = match (tracked.contains(&100), tracked.contains(&200)) {
-        (true, false) => format!(" · {}", lang.f(Msg::ChartTrackedTeam, &[&lang.team(100).to_lowercase()])),
-        (false, true) => format!(" · {}", lang.f(Msg::ChartTrackedTeam, &[&lang.team(200).to_lowercase()])),
-        _ => String::new(),
-    };
-    let mut cv = chart_canvas(width, height, &format!("{}{note}", lang.t(Msg::ChartGoldTitle)));
-    for step in [-1.0, -0.5, 0.0, 0.5, 1.0] {
-        let value = span * step;
-        let line_y = y(value) as u32;
-        cv.rect(left as u32, line_y, (right - left) as u32, 1, 0, if step == 0.0 { "#5b6b84" } else { "#1f2a3c" });
-        let label = if value > 0.0 { format!("+{}", compact(value as i64)) } else if value < 0.0 { format!("-{}", compact(-value as i64)) } else { "0".into() };
-        cv.text(left as u32 - 10, line_y + 5, 12, if value > 0.0 { BLUE } else if value < 0.0 { RED } else { DIM }, 400, "end", &label);
-    }
-    let mut minute = 0;
-    while f64::from(minute) <= minutes {
-        cv.text(x(f64::from(minute)) as u32, bottom as u32 + 24, 12, DIM, 400, "middle", &format!("{minute}'"));
-        minute += 5;
-    }
-    let path: String = points.iter().map(|(t, d)| format!("{:.1},{:.1}", x(*t), y(*d as f64))).collect::<Vec<_>>().join(" ");
-    let area = format!("{:.1},{zero:.1} {path} {:.1},{zero:.1}", x(points[0].0), x(minutes));
-    let _ = write!(cv.svg, "<defs><clipPath id='above'><rect x='0' y='0' width='{width}' height='{zero:.1}'/></clipPath><clipPath id='below'><rect x='0' y='{zero:.1}' width='{width}' height='{height}'/></clipPath></defs>\
-        <polygon points='{area}' fill='{BLUE}' fill-opacity='.35' clip-path='url(#above)'/><polygon points='{area}' fill='{RED}' fill-opacity='.35' clip-path='url(#below)'/>\
-        <polyline points='{path}' fill='none' stroke='{GOLD}' stroke-width='2.5' stroke-linejoin='round'/>");
-    cv.svg.push_str("</g></svg>");
-    rasterize(&cv.svg, width, height)
-}
-
-/// Runs CPU-bound SVG rasterisation off the async runtime.
 pub async fn blocking(work: impl FnOnce() -> Result<Vec<u8>> + Send + 'static) -> Result<Vec<u8>> {
     tokio::task::spawn_blocking(work).await.map_err(|_| anyhow::anyhow!("Image worker failed"))?
 }

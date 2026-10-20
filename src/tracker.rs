@@ -1,6 +1,5 @@
 use crate::{App, model::{Match, Pending, Player, n, now}, reports};
 use anyhow::{Result, bail, ensure};
-use serde_json::Value;
 use std::{collections::{BTreeMap, HashMap, HashSet}, sync::Arc, time::Duration};
 use tokio::time::{Instant, sleep};
 use tracing::{info, warn};
@@ -236,13 +235,6 @@ impl Tracker {
         else { self.app.store.discard(&m.id)?; }
         Ok(())
     }
-}
-
-pub async fn timeline(app: &App, id: &str) -> Result<Option<Value>> {
-    if let Some(value) = app.store.timeline(id)? { return Ok(Some(value)); }
-    let value = app.riot.timeline(id).await?;
-    if let Some(value) = &value { app.store.cache_timeline(id, value)?; }
-    Ok(value)
 }
 
 pub fn parse_player(id: &str, nickname: &str) -> Result<Player> {

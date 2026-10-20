@@ -15,12 +15,12 @@ One binary, one Tokio runtime, one SQLite file.
 | `config.rs` | TOML settings, explicit dotenv/env secrets, validation. Secrets type has no `Debug`. |
 | `model.rs` | Typed `Match`/`Participant`/`Rank`/`Pending`/`Notice`, Match-V5 normalisation. |
 | `riot.rs` | reqwest client: Account-V1, Match-V5, League-V4, Spectator-V5; a shared pacing gate with Retry-After handling; bounded bodies. |
-| `store.rs` | rusqlite behind a `std::sync::Mutex` (never held across `.await`): roster, baselines, seen IDs, pending games, rank snapshots, transactional outbox, message references, timeline cache, retention. |
+| `store.rs` | rusqlite behind a `std::sync::Mutex` (never held across `.await`): roster, baselines, seen IDs, pending games, rank snapshots, transactional outbox, message references, retention. |
 | `tracker.rs` | Sequential loop: roster resolution → Match-V5 history sweep → optional Spectator → pending results → rank refresh → pruning. |
-| `presentation.rs` | Text summaries, commentary, CSV/text detail views. |
+| `presentation.rs` | Text summaries, commentary and the role-aware verdict. |
 | `render.rs`, `render_assets.rs` | SVG built in Rust and rasterised with `resvg`; Data Dragon artwork cache. |
 | `reports.rs` | Rank refresh, daily/weekly report text, timezone-aware scheduler with a durable "last report" marker. |
-| `discord.rs` | Serenity gateway (GUILDS intent only), slash commands, result buttons, outbox delivery worker, optional commentary worker. |
+| `discord.rs` | Serenity gateway (GUILDS intent only), slash commands, outbox delivery worker, optional commentary worker. |
 | `llm.rs` | Optional OpenAI-compatible Chat Completions commentary. |
 
 Data flow: tracker writes match + outbox row in one transaction → delivery worker sends/edits Discord
@@ -181,3 +181,10 @@ production key. *Fix:* `riot.request_interval_ms` (default unchanged).
 - **Not verified:** the live Discord gateway (commands, autocomplete, buttons, message edits, the new
   permission check against a real guild) and real LLM providers. The LLM parser changes are reasoned,
   not exercised.
+
+## Later change: image-only results
+
+The result buttons (damage chart, gold chart, event log, scoreboard text, loadout CSV), their chart
+renderers, the Match-V5 timeline fetch and cache, and the `--charts` preview flag were removed. A
+result post is now the scoreboard image plus optional AI commentary. The sections above that describe
+those features are historical.

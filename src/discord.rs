@@ -7,20 +7,6 @@ use tracing::{info, warn};
 
 pub struct Handler { pub app: Arc<App>, pub slots: Semaphore }
 fn mentions() -> CreateAllowedMentions { CreateAllowedMentions::new().all_users(false).all_roles(false).everyone(false).replied_user(false) }
-fn buttons(id: &str, lang: Lang) -> Vec<CreateActionRow> {
-    vec![CreateActionRow::Buttons([
-        ("damage", Msg::BtnDamage), ("gold", Msg::BtnGold), ("events", Msg::BtnEvents), ("scoreboard", Msg::BtnScoreboard), ("items", Msg::BtnItems),
-    ].into_iter().map(|(action, label)| CreateButton::new(format!("lol:{action}:{id}")).label(lang.t(label)).style(ButtonStyle::Secondary)).collect())]
-}
-fn embed(m: &Match, lang: Lang) -> CreateEmbed {
-    CreateEmbed::new().title(view::limit(&view::result_title(m, lang), 240)).description(view::limit(&view::scoreboard(m, lang), 3500)).color(0x3498db)
-        .footer(CreateEmbedFooter::new(lang.t(Msg::FooterText)))
-}
-fn image_embed(game: &Match, lang: Lang) -> CreateEmbed {
-    CreateEmbed::new().title(view::result_title(game, lang)).color(0x3498db)
-        .image("attachment://scoreboard.png")
-        .footer(CreateEmbedFooter::new(lang.t(Msg::FooterImage)))
-}
 async fn scoreboard_image(app: &App, game: &Match) -> Option<Vec<u8>> {
     match render::png(app, game.clone(), app.cfg.language, false).await {
         Ok(image) => Some(image),
@@ -80,18 +66,6 @@ impl EventHandler for Handler {
                 };
                 if cmd.edit_response(&ctx.http, builder).await.is_err() { warn!("Could not complete Discord command response"); }
             }
-            Interaction::Component(component) => {
-                if component.guild_id.map(|g| g.get()) != Some(self.app.cfg.discord.guild_id) { return; }
-                if component.create_response(&ctx.http, CreateInteractionResponse::Defer(CreateInteractionResponseMessage::new().ephemeral(true))).await.is_err() { return; }
-                let Ok(_slot) = self.slots.try_acquire() else {
-                    let _ = component.edit_response(&ctx.http, EditInteractionResponse::new().content(lang.t(Msg::Busy))).await; return;
-                };
-                let builder = match self.component(&component.data.custom_id).await {
-                    Ok(reply) => reply.builder(lang),
-                    Err(error) => EditInteractionResponse::new().content(reply_error(&error, lang, Msg::ButtonUnavailable)).allowed_mentions(mentions()),
-                };
-                if component.edit_response(&ctx.http, builder).await.is_err() { warn!("Could not complete result-button response"); }
-            }
             Interaction::Autocomplete(cmd) => {
                 if cmd.guild_id.map(|g| g.get()) != Some(self.app.cfg.discord.guild_id) { return; }
                 let admin = cmd.member.as_ref().and_then(|m| m.permissions).is_some_and(|p| p.administrator());
@@ -108,21 +82,18 @@ impl EventHandler for Handler {
         }
     }
 }
-struct Reply { text: String, file: Option<(String, Vec<u8>)>, game: Option<Match> }
+struct Reply { text: String, file: Option<(String, Vec<u8>)> }
 impl Reply {
-    fn text(text: impl Into<String>) -> Self { Self { text: text.into(), file: None, game: None } }
-    fn file(name: &str, data: impl Into<Vec<u8>>) -> Self { Self { text: String::new(), file: Some((name.into(), data.into())), game: None } }
+    fn text(text: impl Into<String>) -> Self { Self { text: text.into(), file: None } }
     fn builder(self, lang: Lang) -> EditInteractionResponse {
         let mut builder = EditInteractionResponse::new().allowed_mentions(mentions());
-        if self.text.is_empty() && self.file.is_none() && self.game.is_none() {
+        if self.text.is_empty() && self.file.is_none() {
             return builder.content(lang.t(Msg::NoData));
         }
         if self.text.encode_utf16().count() > 1900 {
             builder = builder.content(lang.t(Msg::FullAttached)).new_attachment(CreateAttachment::bytes(self.text.into_bytes(), "response.txt"));
         } else { builder = builder.content(self.text); }
         if let Some((name, data)) = self.file { builder = builder.new_attachment(CreateAttachment::bytes(data, name)); }
-        // Image attachments display inline; buttons retain the complete text/data views.
-        if let Some(game) = self.game { builder = builder.components(buttons(&game.id, lang)); }
         builder
     }
 }
@@ -133,19 +104,19 @@ impl Handler {
         match cmd.data.name.as_str() {
             "lastgame" => {
                 let Some(game) = self.app.store.get_match(None)? else { return Ok(Reply::text(lang.t(Msg::NoGames))); };
-                let mut reply = Reply::file("scoreboard.txt", view::scoreboard(&game, lang));
-                if let Some(image) = scoreboard_image(&self.app, &game).await { reply.file = Some(("scoreboard.png".into(), image)); }
-                reply.text = match self.app.store.setting(&format!("commentary/{}", game.id))? {
+                let image = scoreboard_image(&self.app, &game).await;
+                let text = match self.app.store.setting(&format!("commentary/{}", game.id))? {
                     Some(text) => text,
                     // Imported or never-commented games get their AI commentary on first request.
                     None if self.app.llm.is_some() && !game.remake => match ai_text(&self.app, &game).await {
                         Ok(text) => { self.app.store.commentary_done(&game.id, Some(&text))?; text }
-                        Err(error) => { warn!(%error, "Optional LLM commentary unavailable"); view::commentary(&game, lang) }
+                        Err(error) => { warn!(%error, "Optional LLM commentary unavailable"); String::new() }
                     },
-                    None => view::commentary(&game, lang),
+                    None => String::new(),
                 };
-                reply.game = Some(game);
-                Ok(reply)
+                // Commentary is optional; the text summary only stands in when the image could not be drawn.
+                let text = if text.is_empty() && image.is_none() { view::commentary(&game, lang) } else { text };
+                Ok(Reply { text, file: image.map(|png| ("scoreboard.png".into(), png)) })
             }
             "players" => {
                 let players = self.app.store.players()?;
@@ -234,35 +205,6 @@ impl Handler {
             }
             _ => bail!("Unknown command"),
         }
-    }
-    async fn component(&self, custom_id: &str) -> Result<Reply> {
-        let mut parts = custom_id.split(':');
-        ensure!(parts.next() == Some("lol"), "Invalid button");
-        let action = parts.next().unwrap_or(""); let id = parts.next().unwrap_or("");
-        ensure!(parts.next().is_none() && id.len() < 80 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'), "Invalid match ID");
-        let game = self.app.store.get_match(Some(id))?.ok_or_else(|| anyhow::anyhow!("Match expired"))?;
-        let lang = self.app.cfg.language;
-        Ok(match action {
-            "damage" => {
-                let chart_game = game.clone();
-                match render::blocking(move || render::damage_chart(&chart_game, lang)).await {
-                    Ok(png) => Reply::file("damage.png", png),
-                    Err(error) => { warn!(%error, "Damage chart unavailable; sending CSV"); Reply::file("damage.csv", view::damage_csv(&game)) }
-                }
-            }
-            "scoreboard" => Reply::file("scoreboard.txt", view::scoreboard(&game, lang)),
-            "items" => Reply::file("items.csv", view::items_csv(&game)),
-            "gold" | "events" => {
-                let timeline = tracker::timeline(&self.app, id).await?.ok_or_else(|| anyhow::anyhow!("Timeline unavailable"))?;
-                if action == "events" { return Ok(Reply::text(view::events(&game, &timeline, lang))); }
-                let (chart_game, chart_timeline) = (game.clone(), timeline.clone());
-                match render::blocking(move || render::gold_chart(&chart_game, &chart_timeline, lang)).await {
-                    Ok(png) => Reply::file("gold.png", png),
-                    Err(error) => { warn!(%error, "Gold chart unavailable; sending CSV"); Reply::file("gold.csv", view::gold_csv(&game, &timeline)) }
-                }
-            }
-            _ => bail!("Unknown button"),
-        })
     }
 }
 fn str_opt<'a>(opts: &'a [CommandDataOption], name: &str) -> Option<&'a str> {
@@ -370,7 +312,7 @@ async fn deliver(app: &App, http: &Http, delivery: &crate::store::Delivery) -> R
     }
     let (game_id, finished, text, result) = match &delivery.notice {
         Notice::Start(game) => (Some(game.id.as_str()), false, view::limit(&view::start(game, lang), 1900), None),
-        Notice::Result(m) => (Some(m.id.as_str()), true, view::commentary(m, lang), Some(m)),
+        Notice::Result(m) => (Some(m.id.as_str()), true, String::new(), Some(m)),
         Notice::Timeout { id } => (Some(id.as_str()), true, lang.t(Msg::ResultUnavailable).into(), None),
         Notice::Report { text, report } => {
             let channel = app.channel(true)?; ensure!(channel != 0, "Rank channel missing");
@@ -396,13 +338,8 @@ async fn deliver(app: &App, http: &Http, delivery: &crate::store::Delivery) -> R
     if let Some(id) = game_id
         && finished
             && let Some((channel, message)) = app.store.message(id)? {
-                let mut edit = EditMessage::new().content(&text).allowed_mentions(mentions()).components(vec![]).attachments(EditAttachments::new());
-                if let Some(m) = result {
-                    edit = edit.components(buttons(id, lang));
-                    if let Some(image) = &png {
-                        edit = edit.embed(image_embed(m, lang)).new_attachment(CreateAttachment::bytes(image.clone(), "scoreboard.png"));
-                    } else { edit = edit.embed(embed(m, lang)); }
-                }
+                let mut edit = EditMessage::new().content(&text).allowed_mentions(mentions()).attachments(EditAttachments::new());
+                if let Some(image) = &png { edit = edit.new_attachment(CreateAttachment::bytes(image.clone(), "scoreboard.png")); }
                 match ChannelId::new(channel).edit_message(http, MessageId::new(message), edit).await {
                     Ok(_) => { app.store.ack(delivery.id, Some((id, channel, message, true)))?; return Ok(()); }
                     Err(error) if missing(&error) => (), // Only a definite deletion permits a new message.
@@ -410,25 +347,20 @@ async fn deliver(app: &App, http: &Http, delivery: &crate::store::Delivery) -> R
                 }
             }
     let channel = app.channel(false)?; ensure!(channel != 0, "Game channel missing");
+    // The result is the image; commentary joins it later. Text stands in only when the image failed.
+    let text = match (result, &png) { (Some(m), None) => view::commentary(m, lang), _ => text };
     let mut create = CreateMessage::new().content(text).allowed_mentions(mentions());
-    if let Some(m) = result {
-        create = create.components(buttons(&m.id, lang));
-        if let Some(image) = png {
-            create = create.embed(image_embed(m, lang)).add_file(CreateAttachment::bytes(image, "scoreboard.png"));
-        } else { create = create.embed(embed(m, lang)); }
-    }
+    if let Some(image) = png { create = create.add_file(CreateAttachment::bytes(image, "scoreboard.png")); }
     let message = safe_http(ChannelId::new(channel).send_message(http, create).await)?;
     app.store.ack(delivery.id, game_id.map(|id| (id, channel, message.id.get(), finished)))?;
     Ok(())
 }
 
-/// Factual summary plus AI lines when both fit in one message; the AI text only enhances it.
+/// The AI commentary for a game, bounded to one Discord message.
 async fn ai_text(app: &App, game: &Match) -> Result<String> {
     let llm = app.llm.as_ref().ok_or_else(|| anyhow::anyhow!("LLM is not enabled"))?;
     let recent = app.store.recent_commentary(&game.id, 6)?;
-    let ai = llm.enhance(game, app.cfg.language, &recent).await?;
-    let combined = format!("{}\n\n{ai}", view::commentary(game, app.cfg.language));
-    Ok(if combined.encode_utf16().count() <= 2000 { combined } else { view::limit(&ai, 2000) })
+    Ok(view::limit(&llm.enhance(game, app.cfg.language, &recent).await?, 2000))
 }
 
 pub async fn commentary_worker(app: Arc<App>, http: Arc<Http>) -> Result<()> {
@@ -439,7 +371,7 @@ pub async fn commentary_worker(app: Arc<App>, http: Arc<Http>) -> Result<()> {
             if let Err(error) = &text { warn!(%error, "Optional LLM commentary unavailable"); }
             if let Ok(text) = text {
                 if let Some((channel, message)) = app.store.message(&game.id)? {
-                    // Only content changes. The factual scoreboard and its buttons stay intact.
+                    // Only content changes; the scoreboard image stays attached.
                     if ChannelId::new(channel).edit_message(&http, MessageId::new(message), EditMessage::new().content(&text).allowed_mentions(mentions())).await.is_ok() {
                         app.store.commentary_done(&game.id, Some(&text))?;
                     } else { app.store.commentary_done(&game.id, None)?; warn!("Optional commentary edit failed; factual result retained"); }

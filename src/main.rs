@@ -48,9 +48,6 @@ enum Mode {
         /// vi, en, or all (one file per language, suffixed -vi/-en). Defaults to the configured language.
         #[arg(long)]
         language: Option<String>,
-        /// Also render the damage and gold charts beside the scoreboard (-damage/-gold suffixes).
-        #[arg(long)]
-        charts: bool,
     },
     /// Render a daily/weekly/monthly report card to PNG (and print the text version). Uses stored
     /// matches, or fetches recent real matches read-only when none are stored. Never posts.
@@ -133,27 +130,21 @@ async fn execute() -> Result<()> {
             ensure!(!failed, "One or more read-only credential probes failed");
             Ok(())
         }
-        Mode::RenderScoreboard { output, match_id, post, language, charts } => {
+        Mode::RenderScoreboard { output, match_id, post, language } => {
             ensure!(output.extension().and_then(|s| s.to_str()).is_some_and(|s| s.eq_ignore_ascii_case("png")), "Scoreboard output must be a PNG file");
             if post { app.cfg.validate_discord(&secrets)?; }
             let game = render::preview_match(&app, match_id.as_deref()).await?;
             let langs = languages(&app, language.as_deref())?;
-            let timeline = if charts { tracker::timeline(&app, &game.id).await.unwrap_or_else(|error| { tracing::warn!(%error, "Timeline unavailable; skipping gold chart"); None }) } else { None };
             let directory = output.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(std::path::Path::new("."));
             std::fs::create_dir_all(directory)?;
             let stem = output.file_stem().and_then(|s| s.to_str()).unwrap_or("scoreboard");
-            let path = |kind: &str, lang: Lang| {
-                let kind = if kind.is_empty() { String::new() } else { format!("-{kind}") };
+            let path = |lang: Lang| {
                 let suffix = if langs.len() > 1 { format!("-{}", lang.code()) } else { String::new() };
-                directory.join(format!("{stem}{kind}{suffix}.png"))
+                directory.join(format!("{stem}{suffix}.png"))
             };
             for &lang in &langs {
                 let image = render::png(&app, game.clone(), lang, true).await?;
-                std::fs::write(path("", lang), &image)?;
-                if charts {
-                    std::fs::write(path("damage", lang), render::damage_chart(&game, lang)?)?;
-                    if let Some(timeline) = &timeline { std::fs::write(path("gold", lang), render::gold_chart(&game, timeline, lang)?)?; }
-                }
+                std::fs::write(path(lang), &image)?;
                 info!(match_id = %game.id, language = lang.code(), "Saved real-match preview images");
                 if post { discord::post_preview(&app, &secrets.discord, image, lang).await?; }
             }

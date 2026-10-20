@@ -32,14 +32,14 @@ One binary, one Tokio runtime, one SQLite file. No plugin system, agent framewor
 | `config` | TOML settings and env/dotenv secrets, validated without printing values. |
 | `model` | Typed match/participant/rank/notice records and Match-V5 normalisation. |
 | `riot` | reqwest client with one shared pacing gate (`request_interval_ms`), Retry-After and auth backoff, bounded retries and bodies, sanitised errors. |
-| `store` | rusqlite behind a mutex that is never held across `.await`: roster, baselines, seen IDs, pending games, rank snapshots, outbox, message references, timeline cache, retention. |
+| `store` | rusqlite behind a mutex that is never held across `.await`: roster, baselines, seen IDs, pending games, rank snapshots, outbox, message references, retention. |
 | `tracker` | Loop with independently failing steps: rank refresh → roster resolution and history → Spectator → pending results → pruning. |
 | `i18n` | Vietnamese/English catalog: every user-facing string, queue/role/objective names, date formats, Discord locales. |
-| `presentation` | Text summaries, role-aware verdict, CSV/text detail views. |
-| `render`, `render_assets` | Rust-built SVG rasterised by resvg (scoreboard, damage chart, gold chart); font DB built once; Data Dragon artwork cache. |
+| `presentation` | Text summaries and the role-aware verdict. |
+| `render`, `render_assets` | Rust-built SVG rasterised by resvg (scoreboard, report cards); font DB built once; Data Dragon artwork cache. |
 | `reports` | Rank refresh; one `Report` model for daily/weekly/monthly periods (stats, ranks, honours, pairs) rendered as text; timezone-aware scheduler with a durable once-per-day marker. |
 | `report_card` | Report card PNG (hero, group LP, honours, player table, pairs). |
-| `discord` | Serenity gateway (GUILDS intent), commands, autocomplete, buttons, permission checks, outbox delivery, optional commentary worker. |
+| `discord` | Serenity gateway (GUILDS intent), commands, autocomplete, permission checks, outbox delivery, optional commentary worker. |
 | `llm` | Optional OpenAI-compatible Chat Completions adapter. |
 
 ### Data flow

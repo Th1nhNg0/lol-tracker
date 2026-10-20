@@ -160,6 +160,7 @@ catalog! {
     GameStarted: "Vào trận", "Game started";
     RemakeExcluded: "Trận chơi lại; không tính vào thống kê.", "Remake; excluded from statistics.";
     Standout: "Nổi bật", "Standout";
+    KeyPlayer: "Nhân vật chính", "Key player";
     LeastImpact: "Mờ nhạt nhất", "Least impact";
     ReasonTeamDamage: "{} sát thương đội", "{} of team damage";
     ReasonKp: "tham gia {} số mạng", "{} kill participation";
@@ -171,24 +172,11 @@ catalog! {
     ReasonLowest: "đóng góp tổng thể thấp nhất đội", "lowest overall contribution on the team";
 
     // Timeline events
-    EventKill: "{} hạ {}", "{} killed {}";
-    EventMonster: "{} hạ {}", "{} slew {}";
-    EventBuilding: "{} phá {}", "{} destroyed {}";
-    EventNoKiller: "Lính/trụ", "Minions/turret";
-    NoEvents: "Không có sự kiện.", "No events available.";
 
     // Discord messages
-    BtnDamage: "Biểu đồ sát thương", "Damage chart";
-    BtnGold: "Biểu đồ vàng", "Gold chart";
-    BtnEvents: "Diễn biến", "Events";
-    BtnScoreboard: "Bảng điểm", "Scoreboard";
-    BtnItems: "Trang bị", "Items";
-    FooterText: "★ người được theo dõi · nút bên dưới: dữ liệu đầy đủ", "★ tracked player · buttons below: full data";
-    FooterImage: "Dữ liệu đầy đủ ở các nút bên dưới", "Full data available through the buttons below";
     WrongGuild: "Bot này chỉ hoạt động trong máy chủ đã cấu hình.", "This bot only works in its configured server.";
     Busy: "Bot đang bận; vui lòng thử lại sau giây lát.", "Busy; please try again shortly.";
     CommandFailed: "Có lỗi xảy ra; vui lòng thử lại sau.", "Something went wrong; please try again later.";
-    ButtonUnavailable: "Dữ liệu không còn hoặc Riot tạm thời không khả dụng.", "Data expired or Riot is temporarily unavailable.";
     NoData: "Chưa có dữ liệu.", "No data yet.";
     FullAttached: "Nội dung đầy đủ trong tệp đính kèm.", "Full response attached.";
     NoGames: "Chưa có trận nào được ghi nhận.", "No tracked games yet.";
@@ -310,10 +298,4 @@ catalog! {
     ImgTeamTotals: "{} hạ gục  ·  {} vàng  ·  {} sát thương", "{} K  /  {} G  /  {} DMG";
     ImgWards: "{} mắt · {} mắt tím", "{}w · {}c";
     ImgDateFormat: "%d/%m/%Y  ·  %H:%M %Z", "%d %b %Y  ·  %H:%M %Z";
-    ChartDamageTitle: "Sát thương lên tướng", "Damage to champions";
-    ChartPhysical: "Vật lý", "Physical";
-    ChartMagic: "Phép", "Magic";
-    ChartTrue: "Chuẩn", "True";
-    ChartGoldTitle: "Chênh lệch vàng (xanh - đỏ)", "Gold difference (blue - red)";
-    ChartTrackedTeam: "theo dõi: {}", "tracked: {}";
 }

@@ -12,8 +12,8 @@ A standalone Rust League of Legends tracker for one Discord server. Riot supplie
 - Last-game, rank and roster commands; administrator player management with Riot ID autocomplete.
 - Deterministic, role-aware match verdict (MVP and worst player) that needs no LLM.
 - Daily, weekly (Sunday) and monthly (last day of the month) report cards: group LP, honours, per-player statistics, rank and LP change per queue, and same-team pairs. Text fallback.
-- Persistent result buttons: damage chart, gold-difference chart, event log, full scoreboard text and loadout CSV (CSV fallback when a chart cannot be drawn).
-- Full Vietnamese/English localization (`language = "vi"` or `"en"`): messages, images, charts, reports, events and errors, plus localized slash-command descriptions that follow each member's Discord client language. No privileged message-content intent.
+- Result posts are the scoreboard image plus optional AI commentary; no buttons, charts or extra data views.
+- Full Vietnamese/English localization (`language = "vi"` or `"en"`): messages, images, reports and errors, plus localized slash-command descriptions that follow each member's Discord client language. No privileged message-content intent.
 - SQLite state and a retryable Discord outbox. Optional, anonymized AI commentary using OpenAI-compatible APIs.
 
 This is a fresh implementation, not a distribution of the reference application. See [plans.md](plans.md) for the architecture and decisions, and [REVIEW.md](REVIEW.md) for the technical audit and feature-parity record. Report image cards, videos, narration, screenshot analysis, custom guild emoji and private inside jokes are intentionally **not** included. No legacy history or source is bundled.
@@ -111,18 +111,18 @@ Ctrl-C or SIGTERM shuts down workers; pending results and notifications remain i
 ```
 
 ```sh
-# Every image (scoreboard, damage chart, gold chart) in both languages, for review.
+# The scoreboard image in both languages, for review.
 ./target/debug/lol-tracker --env-file .env render-scoreboard \
-  --output data/preview/scoreboard.png --language all --charts
+  --output data/preview/scoreboard.png --language all
 ```
 
-`--language vi|en|all` overrides the configured language; `all` writes one file per language (`-vi`/`-en` suffixes) and, with `--post`, posts one preview per language. `--charts` also writes the damage and gold charts (`-damage`/`-gold` suffixes). Use `--match-id PLATFORM_matchnumber` for an exact real match. Otherwise use the latest locally stored match or, if none is stored yet, the newest published match among one recent ID per roster member. Preview fetching does not import old matches, change baselines, drain notifications or call an LLM (it may cache the match timeline locally). Images are labeled as previews and use the configured report timezone. Champion portraits, splash art and spell/rune/item icons come from Riot Data Dragon. The keyless artwork cache sits beside the database in `artwork/`, with 24-hour metadata caching and a 64 MiB/30-day file budget enforced during rendering. No Riot artwork is committed or bundled with source. An external private output path is also supported.
+`--language vi|en|all` overrides the configured language; `all` writes one file per language (`-vi`/`-en` suffixes) and, with `--post`, posts one preview per language. Use `--match-id PLATFORM_matchnumber` for an exact real match. Otherwise use the latest locally stored match or, if none is stored yet, the newest published match among one recent ID per roster member. Preview fetching does not import old matches, change baselines, drain notifications or call an LLM. Images are labeled as previews and use the configured report timezone. Champion portraits, splash art and spell/rune/item icons come from Riot Data Dragon. The keyless artwork cache sits beside the database in `artwork/`, with 24-hour metadata caching and a 64 MiB/30-day file budget enforced during rendering. No Riot artwork is committed or bundled with source. An external private output path is also supported.
 
 ### Localization
 
 All user-facing text lives in [`src/i18n.rs`](src/i18n.rs): one `Msg` catalog in which every entry has exactly one string per language, plus queue, role, objective, monster and building names, and date formats. A missing translation is a compile error, so adding a language means adding a `Lang` variant and one column. Logs, CSV headers and the LLM prompt stay English; KDA, CS, KP, LP and champion names are not translated. Command errors meant for members are localized; unexpected internal errors show a localized generic message and are logged in English. Slash-command descriptions are registered in English (Discord's default) with Vietnamese localizations, so re-run `--register-commands` after upgrading.
 
-Normal result notifications and `/lastgame` reuse the renderer with text fallback. Damage and gold buttons render PNG charts with the same renderer. Full scoreboards, events and loadout data remain accessible through the buttons.
+Normal result notifications and `/lastgame` reuse the renderer. The image is the result; a short text summary appears only if the image cannot be drawn.
 
 ### Render a report card preview
 
@@ -136,11 +136,11 @@ Normal result notifications and `/lastgame` reuse the renderer with text fallbac
 
 ### Discord commands
 
-All commands are guild-restricted. `/lastgame` and `/rank` reply in the channel (as in the original bot); `/players` and every `/config` reply are private to the invoking member, as are button responses. Result/report notifications go to the configured channels. Mentions are disabled.
+All commands are guild-restricted. `/lastgame` and `/rank` reply in the channel (as in the original bot); `/players` and every `/config` reply are private to the invoking member. Result/report notifications go to the configured channels. Mentions are disabled.
 
 | Command | Behavior | Permission |
 | --- | --- | --- |
-| `/lastgame` | Latest scoreboard and detail buttons | Any member |
+| `/lastgame` | Latest scoreboard image, with AI commentary when enabled | Any member |
 | `/rank` | Fetch current tracked Solo/Duo and Flex ranks | Any member |
 | `/players` | Current roster | Any member |
 | `/config channel channel:…` | Change game notification channel | Manage Server |
@@ -161,11 +161,9 @@ Permissions are checked in the handler, not just the command picker. At most two
 - **First launch/new player:** baseline existing history silently. Subsequent starts recover unseen results within `catch_up_hours` (default three) and the configured ID-count window. This is bounded catch-up, not a complete historical backfill. Baselines are per-account so a newly added account cannot suppress another member's shared result.
 - **LP:** the per-match change compares a "before" rank with the rank fetched just after the game. "Before" is the Spectator pre-game rank or, in history mode, the newest snapshot taken at or before the game start **by the current process**, so a restart never folds downtime games into one delta. The post-game lookup must happen within 20 minutes of the game ending; League-V4 lag is retried briefly. An unchanged rank shows unknown rather than zero. Reports compare observed snapshots and label partial baselines. Cross-tier LP uses a normalized tier/division value; it is not MMR.
 - **Reports:** posted at the configured local time (default 23:59 Asia/Ho_Chi_Minh) as a PNG card with a text fallback. Daily and weekly reports use rolling 24-hour/seven-day windows; the monthly report covers the calendar month so far. Sunday's weekly report replaces the daily one; on the last day of the month the monthly report replaces the daily one, and if that day is a Sunday both the weekly and monthly reports are posted (`reports.monthly = false` disables monthly reports). Weekly and monthly cards add honours (most kills, most deaths, top damage per game, CS/min, vision/min, best win rate with minimum game counts) and same-team pairs. Remakes do not count. LP change per queue compares the rank before the window with the latest one; a single observation shows as unknown, never as zero. Report dates and queued payloads persist atomically. Startup after today's scheduled time can catch up today's report, but not every missed calendar day.
-- **Retention:** old delivered match data, snapshots and deduplication rows are trimmed after `retention_days`; latest rank snapshots, pending games and unsent result data survive. Timeline cache retains at most 50 matches. SQLite reuses freed pages; this is age retention, not a hard disk quota. Back up SQLite consistently (stop this local instance or use SQLite's backup facility), including uncheckpointed WAL data.
+- **Retention:** old delivered match data, snapshots and deduplication rows are trimmed after `retention_days`; latest rank snapshots, pending games and unsent result data survive. SQLite reuses freed pages; this is age retention, not a hard disk quota. Back up SQLite consistently (stop this local instance or use SQLite's backup facility), including uncheckpointed WAL data.
 - **Delivery:** each notification retries independently with bounded backoff, so one failing channel does not block other notifications. Stored results and delivery intent are atomic, but Discord acknowledgement is not: a crash after a successful send can still cause a duplicate. Sending is **at-least-once**, not exactly-once. Edits only fall back to a new message on a definite missing-message response.
 - **Unavailable data:** Riot custom/private games and unavailable timelines cannot be reconstructed from history. A failed API call never implies a player is out of game. If publication remains unavailable, a timeout message leaves history polling enabled.
-
-Charts and CSV fallbacks are bounded; CSV names are quoted and protected against spreadsheet formula injection. Item/spell/rune IDs in the loadout CSV are raw Riot identifiers. Result embeds are bounded; the scoreboard button always supplies full stored detail.
 
 ## Optional LLM
 
@@ -186,7 +184,7 @@ To enable, set `enabled = true`, choose a `model`, and set the provider's **API 
 
 Set `prompt_file = "prompt.md"` under `[llm]` to control the commentary voice. Copy [`prompt.example.md`](prompt.example.md), edit it, and keep your copy private (`prompt.md` is git-ignored; relative paths resolve against the config file). Without it a short built-in style is used. The file only sets tone and style: the output contract (a JSON array of `player`, `title`, `comment`, `emoji`) is appended by the bot. Each reply line renders as `emoji Name — title: comment`. The model also receives the last few comments so it avoids repeating jokes, and all ten participants' statistics (the other five are context only). `send_names = true` additionally sends tracked players' display names so the prompt can use inside jokes; it is off by default. `/lastgame` generates and stores commentary on first use for games that have none, such as imported history.
 
-Core result delivery happens first. A separate worker then appends the AI block below the deterministic summary when both fit in one message (otherwise the AI block replaces it), keeping the factual scoreboard image and buttons. Requests carry numeric participant labels, champions, roles, teams and final statistics, never Riot IDs, PUUIDs, Discord IDs, secrets or chat history; display names only with `send_names = true`. That data still goes to your chosen provider, so review its terms and privacy policy. Missing credentials, unsupported models, malformed replies, provider failures or edit failures leave the deterministic summary intact. No LLM is used by commands, collection, reports, permissions or state transitions. AI commentary is explicitly labeled and may still be inaccurate.
+Core result delivery happens first. A separate worker then edits the AI commentary into the message under the scoreboard image; without an LLM the post is just the image. Requests carry numeric participant labels, champions, roles, teams and final statistics, never Riot IDs, PUUIDs, Discord IDs, secrets or chat history; display names only with `send_names = true`. That data still goes to your chosen provider, so review its terms and privacy policy. Missing credentials, unsupported models, malformed replies, provider failures or edit failures leave the image-only post intact. No LLM is used by commands, collection, reports, permissions or state transitions. AI commentary may be inaccurate.
 
 ### ChatGPT account sign-in investigation
 

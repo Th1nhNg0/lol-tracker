@@ -1,6 +1,4 @@
-use crate::{i18n::{Lang, Msg}, model::{Match, Participant, Pending, n}};
-use serde_json::Value;
-use std::fmt::Write;
+use crate::{i18n::{Lang, Msg}, model::{Match, Participant, Pending}};
 
 pub fn limit(text: &str, max: usize) -> String {
     let mut units = 0;
@@ -13,41 +11,10 @@ pub fn limit(text: &str, max: usize) -> String {
 pub fn plain(text: &str) -> String {
     text.chars().filter(|c| !c.is_control() && !matches!(c, '`' | '*' | '_' | '~' | '|' | '@' | '<' | '>' | '\\')).take(64).collect()
 }
-pub fn result_title(m: &Match, lang: Lang) -> String {
-    let remake = if m.remake { format!(" · {}", lang.t(Msg::Remake)) } else { String::new() };
-    format!("{} · {} · {}:{:02}{remake}", lang.t(Msg::Result), lang.queue(m.queue), m.duration / 60, m.duration % 60)
-}
 pub fn start(game: &Pending, lang: Lang) -> String {
     format!("{} · {}\n{}", lang.t(Msg::GameStarted), lang.queue(game.queue), game.names.iter().map(|s| plain(s)).collect::<Vec<_>>().join("\n"))
 }
 pub fn outcome(p: &Participant, lang: Lang) -> &'static str { lang.t(if p.win { Msg::Win } else { Msg::Loss }) }
-fn role_label(p: &Participant, lang: Lang) -> String {
-    match lang.role(&p.role) { "" => plain(&p.champion), role => format!("{}, {role}", plain(&p.champion)) }
-}
-pub fn scoreboard(m: &Match, lang: Lang) -> String {
-    let mut out = format!("{} · {}\n", result_title(m, lang), m.id);
-    let mut teams: Vec<u16> = m.participants.iter().map(|p| p.team).collect(); teams.sort_unstable(); teams.dedup();
-    for team in teams {
-        let players: Vec<_> = m.participants.iter().filter(|p| p.team == team).collect();
-        let kills: i64 = players.iter().map(|p| p.kills).sum();
-        let gold: i64 = players.iter().map(|p| p.gold).sum();
-        let _ = writeln!(out, "\n{} · {kills} K · {gold} G", lang.team(team));
-        for p in players {
-            let _ = writeln!(out, "{}{} · {} · {} · {}/{}/{} · {} CS · {} · {} G · {} VIS",
-                if p.tracked { "★ " } else { "" }, plain(&p.name), role_label(p, lang), outcome(p, lang), p.kills, p.deaths, p.assists, p.cs,
-                lang.f(Msg::DamageShort, &[&p.damage]), p.gold, p.vision);
-            if p.tracked && let Some(rank) = &p.rank_after {
-                let delta = p.lp_delta.map(|d| format!("{d:+} LP")).unwrap_or_else(|| lang.t(Msg::LpUnknown).into());
-                let _ = writeln!(out, "  {} · {delta}", lang.rank(rank));
-            }
-        }
-        if let Some(objectives) = m.objectives.get(&team.to_string()) {
-            let line = objectives.iter().map(|(k, v)| format!("{}: {v}", lang.objective(k))).collect::<Vec<_>>().join(" · ");
-            let _ = writeln!(out, "{line}");
-        }
-    }
-    out
-}
 pub fn commentary(m: &Match, lang: Lang) -> String {
     if m.remake { return lang.t(Msg::RemakeExcluded).into(); }
     let mut lines = Vec::new();
@@ -187,65 +154,4 @@ pub fn verdict(m: &Match, lang: Lang) -> Option<String> {
         lines.push(line("📉", Msg::LeastImpact, rows[0].0, false));
     }
     (!lines.is_empty()).then(|| lines.join("\n"))
-}
-fn csv_cell(s: &str) -> String {
-    // Spreadsheet formula injection prevention, in addition to RFC 4180 quoting.
-    let value = s.trim_start();
-    let prefix = if value.starts_with(['=', '+', '-', '@']) { "'" } else { "" };
-    format!("\"{prefix}{}\"", s.replace('"', "\"\"").replace(['\r', '\n'], " "))
-}
-pub fn damage_csv(m: &Match) -> String {
-    let mut out = "name,champion,team,tracked,physical,magic,true,total\r\n".to_owned();
-    let mut players: Vec<_> = m.participants.iter().collect(); players.sort_by_key(|p| -p.damage);
-    for p in players {
-        let _ = write!(out, "{},{},{},{},{},{},{},{}\r\n", csv_cell(&p.name), csv_cell(&p.champion), p.team, p.tracked, p.physical, p.magic, p.true_damage, p.damage);
-    }
-    out
-}
-pub fn items_csv(m: &Match) -> String {
-    let mut out = "name,champion,items,spells,runes,penta,quadra,objectives_stolen\r\n".to_owned();
-    let list = |v: &[i64]| v.iter().map(i64::to_string).collect::<Vec<_>>().join(";");
-    for p in &m.participants {
-        let _ = write!(out, "{},{},{},{},{},{},{},{}\r\n", csv_cell(&p.name), csv_cell(&p.champion), csv_cell(&list(&p.items)), csv_cell(&list(&p.spells)), csv_cell(&list(&p.runes)), p.penta, p.quadra, p.objectives_stolen);
-    }
-    out
-}
-pub fn gold_csv(m: &Match, timeline: &Value) -> String {
-    let mut out = "minute,team,total_gold,blue_minus_red\r\n".to_owned();
-    for frame in timeline["info"]["frames"].as_array().into_iter().flatten() {
-        let mut blue = 0; let mut red = 0;
-        for p in &m.participants {
-            let gold = n(&frame["participantFrames"][p.id.to_string()], "totalGold");
-            if p.team == 100 { blue += gold; } else if p.team == 200 { red += gold; }
-        }
-        let minute = n(frame, "timestamp") as f64 / 60000.0;
-        let _ = write!(out, "{minute:.2},100,{blue},{}\r\n{minute:.2},200,{red},{}\r\n", blue - red, blue - red);
-    }
-    out.push_str("\r\nminute,participant,team,total_gold\r\n");
-    for frame in timeline["info"]["frames"].as_array().into_iter().flatten() {
-        for p in m.participants.iter().filter(|p| p.tracked) {
-            let _ = write!(out, "{:.2},{},{},{}\r\n", n(frame, "timestamp") as f64 / 60000.0, csv_cell(&p.name), p.team, n(&frame["participantFrames"][p.id.to_string()], "totalGold"));
-        }
-    }
-    out
-}
-pub fn events(m: &Match, timeline: &Value, lang: Lang) -> String {
-    let label = |id: i64| m.participants.iter().find(|p| p.id == id as u64).map(|p| format!("{} ({})", plain(&p.name), plain(&p.champion))).unwrap_or_else(|| lang.t(Msg::EventNoKiller).into());
-    let text = |event: &Value, key: &str| event[key].as_str().unwrap_or("").to_owned();
-    let mut out = String::new();
-    for frame in timeline["info"]["frames"].as_array().into_iter().flatten() {
-        for event in frame["events"].as_array().into_iter().flatten() {
-            let timestamp = n(event, "timestamp") / 1000;
-            let killer = label(n(event, "killerId"));
-            let line = match event["type"].as_str().unwrap_or("") {
-                "CHAMPION_KILL" => lang.f(Msg::EventKill, &[&killer, &label(n(event, "victimId"))]),
-                "ELITE_MONSTER_KILL" => lang.f(Msg::EventMonster, &[&killer, &lang.monster(&text(event, "monsterType"), &text(event, "monsterSubType"))]),
-                "BUILDING_KILL" => lang.f(Msg::EventBuilding, &[&killer, &lang.building(&text(event, "buildingType"), &text(event, "laneType"))]),
-                _ => continue,
-            };
-            let _ = writeln!(out, "{:02}:{:02} {line}", timestamp / 60, timestamp % 60);
-            if out.len() > 256 * 1024 { out.push_str("\n[…]\n"); return out; }
-        }
-    }
-    if out.is_empty() { lang.t(Msg::NoEvents).into() } else { out }
 }

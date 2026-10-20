@@ -79,9 +79,6 @@ impl Riot {
     pub async fn match_data(&self, id: &str) -> Result<Option<Value>> {
         self.get(&self.region, &["lol", "match", "v5", "matches", id], &[], true).await
     }
-    pub async fn timeline(&self, id: &str) -> Result<Option<Value>> {
-        self.get(&self.region, &["lol", "match", "v5", "matches", id, "timeline"], &[], true).await
-    }
     pub async fn active(&self, puuid: &str) -> Result<Option<Value>> {
         self.get(&self.platform, &["lol", "spectator", "v5", "active-games", "by-summoner", puuid], &[], true).await
     }

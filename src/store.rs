@@ -2,7 +2,6 @@ use crate::model::{Match, Notice, Pending, Player, Rank, Snapshot, now};
 use anyhow::{Context, Result, ensure};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Serialize, de::DeserializeOwned};
-use serde_json::Value;
 use std::{fs, path::Path, sync::{Mutex, MutexGuard}};
 
 pub struct Store(Mutex<Connection>);
@@ -31,7 +30,7 @@ impl Store {
             CREATE TABLE IF NOT EXISTS pending(id TEXT PRIMARY KEY,data TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS outbox(id INTEGER PRIMARY KEY,unique_key TEXT UNIQUE,at INTEGER NOT NULL,data TEXT NOT NULL,retry_at INTEGER NOT NULL DEFAULT 0,attempts INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS messages(game_id TEXT PRIMARY KEY,channel_id TEXT NOT NULL,message_id TEXT NOT NULL,finished INTEGER NOT NULL,at INTEGER NOT NULL);
-            CREATE TABLE IF NOT EXISTS timelines(id TEXT PRIMARY KEY,at INTEGER NOT NULL,data TEXT NOT NULL);
+            DROP TABLE IF EXISTS timelines;
             PRAGMA user_version=1;
         ")?;
         Ok(Self(Mutex::new(db)))
@@ -206,16 +205,6 @@ impl Store {
         let row: Option<(String, String)> = self.db()?.query_row("SELECT channel_id,message_id FROM messages WHERE game_id=?", [id], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
         row.map(|(c, m)| Ok((c.parse()?, m.parse()?))).transpose()
     }
-    pub fn timeline(&self, id: &str) -> Result<Option<Value>> {
-        let row: Option<String> = self.db()?.query_row("SELECT data FROM timelines WHERE id=?", [id], |r| r.get(0)).optional()?;
-        row.map(|s| decode(&s)).transpose()
-    }
-    pub fn cache_timeline(&self, id: &str, value: &Value) -> Result<()> {
-        let db = self.db()?;
-        db.execute("INSERT OR REPLACE INTO timelines VALUES(?,?,?)", params![id, now(), encode(value)?])?;
-        db.execute("DELETE FROM timelines WHERE id NOT IN (SELECT id FROM timelines ORDER BY at DESC LIMIT 50)", [])?;
-        Ok(())
-    }
     pub fn next_commentary(&self) -> Result<Option<Match>> {
         let row: Option<String> = self.db()?.query_row("SELECT m.data FROM matches m JOIN messages d ON d.game_id=m.id WHERE m.commented=0 AND d.finished=1 AND m.ended_at>? ORDER BY m.ended_at DESC LIMIT 1", [now() - 10800], |r| r.get(0)).optional()?;
         row.map(|s| decode(&s)).transpose()
@@ -230,9 +219,7 @@ impl Store {
     pub fn recent_commentary(&self, skip: &str, limit: usize) -> Result<Vec<String>> {
         let db = self.db()?;
         let mut q = db.prepare("SELECT s.value FROM settings s JOIN matches m ON s.key='commentary/' || m.id WHERE m.id<>? ORDER BY m.ended_at DESC LIMIT ?")?;
-        let rows = q.query_map(params![skip, limit as i64], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
-        // Stored text is "factual summary\n\nAI lines" when both fit, otherwise only the AI lines.
-        Ok(rows.into_iter().map(|t| t.rsplit("\n\n").next().unwrap_or(&t).to_owned()).collect())
+        Ok(q.query_map(params![skip, limit as i64], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
     }
     pub fn prune(&self, days: u32) -> Result<()> {
         let cutoff = now() - i64::from(days) * 86400;
@@ -243,7 +230,6 @@ impl Store {
         tx.execute("DELETE FROM baseline WHERE at<?", [cutoff])?;
         tx.execute("DELETE FROM seen WHERE at<? AND id NOT IN (SELECT id FROM pending) AND NOT EXISTS(SELECT 1 FROM outbox WHERE unique_key='result/' || seen.id)", [cutoff])?;
         tx.execute("DELETE FROM messages WHERE at<? AND game_id NOT IN (SELECT id FROM pending) AND NOT EXISTS(SELECT 1 FROM outbox WHERE unique_key='result/' || messages.game_id OR unique_key='timeout/' || messages.game_id)", [cutoff])?;
-        tx.execute("DELETE FROM timelines WHERE at<?", [cutoff])?;
         tx.execute("DELETE FROM settings WHERE key LIKE 'commentary/%' AND substr(key,12) NOT IN (SELECT id FROM matches)", [])?;
         tx.commit()?;
         db.execute_batch("PRAGMA wal_checkpoint(PASSIVE);")?;
