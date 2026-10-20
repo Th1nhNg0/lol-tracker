@@ -63,19 +63,12 @@ pub struct Participant {
     pub assists: i64,
     pub cs: i64,
     pub damage: i64,
-    pub physical: i64,
-    pub magic: i64,
-    pub true_damage: i64,
     pub gold: i64,
     pub vision: i64,
     #[serde(default)]
     pub level: i64,
     #[serde(default)]
     pub damage_taken: i64,
-    #[serde(default)]
-    pub wards: i64,
-    #[serde(default)]
-    pub control_wards: i64,
     #[serde(default)]
     pub objective_damage: i64,
     #[serde(default)]
@@ -84,11 +77,6 @@ pub struct Participant {
     #[serde(default)]
     pub team_help: i64,
     pub items: Vec<i64>,
-    pub spells: Vec<i64>,
-    pub runes: Vec<i64>,
-    pub penta: i64,
-    pub quadra: i64,
-    pub objectives_stolen: i64,
     pub rank_before: Option<Rank>,
     pub rank_after: Option<Rank>,
     pub lp_delta: Option<i64>,
@@ -125,16 +113,11 @@ impl Match {
                 tracked: player.is_some(), win: v["win"].as_bool().unwrap_or(false),
                 kills: n(v, "kills"), deaths: n(v, "deaths"), assists: n(v, "assists"),
                 cs: n(v, "totalMinionsKilled") + n(v, "neutralMinionsKilled"), damage: n(v, "totalDamageDealtToChampions"),
-                physical: n(v, "physicalDamageDealtToChampions"), magic: n(v, "magicDamageDealtToChampions"), true_damage: n(v, "trueDamageDealtToChampions"),
                 gold: n(v, "goldEarned"), vision: n(v, "visionScore"),
                 level: n(v, "champLevel"), damage_taken: n(v, "totalDamageTaken"),
-                wards: n(v, "wardsPlaced"), control_wards: n(v, "visionWardsBoughtInGame"),
                 objective_damage: n(v, "damageDealtToObjectives"), cc_time: n(v, "timeCCingOthers"),
                 team_help: n(v, "totalHealsOnTeammates") + n(v, "totalDamageShieldedOnTeammates"),
                 items: (0..7).map(|i| n(v, &format!("item{i}"))).collect(),
-                spells: vec![n(v, "summoner1Id"), n(v, "summoner2Id")],
-                runes: vec![v.pointer("/perks/styles/0/selections/0/perk").and_then(Value::as_i64).unwrap_or(0), v.pointer("/perks/styles/1/style").and_then(Value::as_i64).unwrap_or(0)],
-                penta: n(v, "pentaKills"), quadra: n(v, "quadraKills"), objectives_stolen: n(v, "objectivesStolen"),
                 ..Default::default()
             }
         }).collect();
@@ -148,20 +131,8 @@ impl Match {
     }
 }
 #[derive(Clone, Serialize, Deserialize)]
-pub struct Pending {
-    pub id: String,
-    pub queue: u16,
-    pub started_at: i64,
-    pub ended_at: Option<i64>,
-    pub puuids: Vec<String>,
-    pub names: Vec<String>,
-    pub before: BTreeMap<String, Rank>,
-}
-#[derive(Clone, Serialize, Deserialize)]
 pub enum Notice {
-    Start(Pending),
     Result(Match),
-    Timeout { id: String },
     /// `report` is absent in notices queued by older versions; they are sent as text.
     Report { text: String, #[serde(default)] report: Option<crate::reports::Report> },
 }

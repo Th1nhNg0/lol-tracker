@@ -2,7 +2,7 @@ use crate::{config, model::{Player, Rank, n, s}};
 use anyhow::{Result, bail, ensure};
 use reqwest::{Client, Response, Url, header::{HeaderMap, HeaderValue}};
 use serde_json::Value;
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 use tokio::{sync::Mutex, time::{Instant, sleep}};
 
 #[derive(Clone)]
@@ -79,9 +79,6 @@ impl Riot {
     pub async fn match_data(&self, id: &str) -> Result<Option<Value>> {
         self.get(&self.region, &["lol", "match", "v5", "matches", id], &[], true).await
     }
-    pub async fn active(&self, puuid: &str) -> Result<Option<Value>> {
-        self.get(&self.platform, &["lol", "spectator", "v5", "active-games", "by-summoner", puuid], &[], true).await
-    }
     pub async fn ranks(&self, puuid: &str) -> Result<Vec<Rank>> {
         let value = self.get(&self.platform, &["lol", "league", "v4", "entries", "by-puuid", puuid], &[], false).await?;
         let rows = value.as_ref().and_then(Value::as_array).ok_or_else(|| anyhow::anyhow!("Invalid rank response"))?;
@@ -89,18 +86,6 @@ impl Riot {
             let queue = match s(v, "queueType").as_str() { "RANKED_SOLO_5x5" => 420, "RANKED_FLEX_SR" => 440, _ => return None };
             Some(Rank { queue, tier: s(v, "tier"), division: s(v, "rank"), lp: n(v, "leaguePoints") })
         }).collect())
-    }
-    // Presentation-only, no API key is sent to the CDN. Failure is non-fatal.
-    pub async fn champions(&self) -> Result<HashMap<i64, String>> {
-        let response = self.http.get("https://ddragon.leagueoflegends.com/api/versions.json").send().await.map_err(|_| anyhow::anyhow!("Data Dragon unavailable"))?;
-        ensure!(response.status().is_success(), "Data Dragon unavailable");
-        let versions: Vec<String> = serde_json::from_slice(&bounded_body(response, 256 * 1024).await?).map_err(|_| anyhow::anyhow!("Invalid Data Dragon versions"))?;
-        let version = versions.first().ok_or_else(|| anyhow::anyhow!("No Data Dragon version"))?;
-        ensure!(version.chars().all(|c| c.is_ascii_digit() || c == '.'), "Invalid Data Dragon version");
-        let response = self.http.get(format!("https://ddragon.leagueoflegends.com/cdn/{version}/data/en_US/champion.json")).send().await.map_err(|_| anyhow::anyhow!("Data Dragon unavailable"))?;
-        ensure!(response.status().is_success(), "Data Dragon unavailable");
-        let v: Value = serde_json::from_slice(&bounded_body(response, 2 * 1024 * 1024).await?).map_err(|_| anyhow::anyhow!("Invalid champion catalog"))?;
-        Ok(v["data"].as_object().into_iter().flat_map(|m| m.values()).filter_map(|c| Some((c["key"].as_str()?.parse().ok()?, c["name"].as_str()?.to_owned()))).collect())
     }
 }
 pub async fn bounded_body(mut response: Response, limit: usize) -> Result<Vec<u8>> {

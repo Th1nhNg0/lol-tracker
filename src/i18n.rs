@@ -143,7 +143,6 @@ catalog! {
     Win: "Thắng", "Win";
     Loss: "Thua", "Loss";
     Remake: "Chơi lại", "Remake";
-    Result: "Kết quả", "Result";
     TeamBlue: "Đội xanh", "Blue team";
     TeamRed: "Đội đỏ", "Red team";
     TeamNumber: "Đội {}", "Team {}";
@@ -157,7 +156,6 @@ catalog! {
     DamageShort: "{} sát thương", "{} DMG";
 
     // Text results and commentary
-    GameStarted: "Vào trận", "Game started";
     RemakeExcluded: "Trận chơi lại; không tính vào thống kê.", "Remake; excluded from statistics.";
     Standout: "Nổi bật", "Standout";
     KeyPlayer: "Nhân vật chính", "Key player";
@@ -200,14 +198,12 @@ catalog! {
     ReportQueued: "Đã xếp hàng báo cáo.", "Report queued.";
     NoGamesInPeriod: "Chưa có trận nào trong kỳ.", "No games in this period.";
     RiotUnavailable: "Riot tạm thời không khả dụng; vui lòng thử lại sau.", "Riot is temporarily unavailable; please try again later.";
-    ResultUnavailable: "Riot chưa công bố kết quả; sẽ tiếp tục tìm trong lịch sử đấu.", "Riot has not published the result; history polling will continue.";
     ReportAttached: "Báo cáo đính kèm.", "Report attached.";
     ChannelNotText: "Kênh phải là kênh văn bản hoặc thông báo trong máy chủ này.", "The channel must be a text or announcement channel in this server.";
     ChannelMissingPerms: "Bot thiếu quyền trong kênh này: {}", "The bot lacks permissions in this channel: {}";
     ChannelUnreachable: "Bot không truy cập được kênh này.", "The bot cannot access this channel.";
     PermViewChannel: "Xem kênh", "View Channel";
     PermSendMessages: "Gửi tin nhắn", "Send Messages";
-    PermEmbedLinks: "Nhúng liên kết", "Embed Links";
     PermAttachFiles: "Đính kèm tập tin", "Attach Files";
 
     // Slash-command descriptions (English is Discord's default; others are localizations)

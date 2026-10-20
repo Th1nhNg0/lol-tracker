@@ -19,9 +19,7 @@ pub struct Config {
 #[serde(default, deny_unknown_fields)]
 pub struct Riot {
     pub platform: String,
-    pub spectator: bool,
     pub history_interval_secs: u64,
-    pub spectator_interval_secs: u64,
     pub catch_up_hours: u32,
     pub history_count: u8,
     pub request_interval_ms: u64,
@@ -70,7 +68,7 @@ impl Default for Config {
 }
 impl Default for Riot {
     fn default() -> Self {
-        Self { platform: "vn2".into(), spectator: false, history_interval_secs: 60, spectator_interval_secs: 15, catch_up_hours: 3, history_count: 20, request_interval_ms: 1250 }
+        Self { platform: "vn2".into(), history_interval_secs: 60, catch_up_hours: 3, history_count: 20, request_interval_ms: 1250 }
     }
 }
 impl Default for Reports {
@@ -86,7 +84,7 @@ impl Config {
         let mut cfg: Self = toml::from_str(&text).map_err(|_| anyhow::anyhow!("Invalid TOML configuration or unknown field"))?;
         cfg.riot.platform.make_ascii_lowercase();
         ensure!(region(&cfg.riot.platform).is_some(), "Unsupported Riot platform");
-        ensure!(cfg.riot.history_interval_secs >= 15 && cfg.riot.spectator_interval_secs >= 10, "Polling intervals are too short");
+        ensure!(cfg.riot.history_interval_secs >= 15, "history_interval_secs must be at least 15");
         ensure!((1..=100).contains(&cfg.riot.history_count), "history_count must be 1..100");
         ensure!((50..=10_000).contains(&cfg.riot.request_interval_ms), "request_interval_ms must be 50..10000");
         ensure!((1..=72).contains(&cfg.riot.catch_up_hours), "catch_up_hours must be 1..72");

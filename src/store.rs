@@ -1,4 +1,4 @@
-use crate::model::{Match, Notice, Pending, Player, Rank, Snapshot, now};
+use crate::model::{Match, Notice, Player, Rank, Snapshot, now};
 use anyhow::{Context, Result, ensure};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Serialize, de::DeserializeOwned};
@@ -27,7 +27,7 @@ impl Store {
             CREATE TABLE IF NOT EXISTS matches(id TEXT PRIMARY KEY,ended_at INTEGER NOT NULL,data TEXT NOT NULL,commented INTEGER NOT NULL DEFAULT 0);
             CREATE INDEX IF NOT EXISTS matches_time ON matches(ended_at);
             CREATE TABLE IF NOT EXISTS ranks(puuid TEXT,queue INTEGER,at INTEGER,data TEXT NOT NULL,PRIMARY KEY(puuid,queue,at));
-            CREATE TABLE IF NOT EXISTS pending(id TEXT PRIMARY KEY,data TEXT NOT NULL);
+            DROP TABLE IF EXISTS pending;
             CREATE TABLE IF NOT EXISTS outbox(id INTEGER PRIMARY KEY,unique_key TEXT UNIQUE,at INTEGER NOT NULL,data TEXT NOT NULL,retry_at INTEGER NOT NULL DEFAULT 0,attempts INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS messages(game_id TEXT PRIMARY KEY,channel_id TEXT NOT NULL,message_id TEXT NOT NULL,finished INTEGER NOT NULL,at INTEGER NOT NULL);
             DROP TABLE IF EXISTS timelines;
@@ -119,21 +119,6 @@ impl Store {
         let row: Option<(i64, String)> = self.db()?.query_row("SELECT at,data FROM ranks WHERE puuid=? AND queue=? AND at>? AND at<=? ORDER BY at LIMIT 1", params![puuid, queue, start, end], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
         row.map(|(at, text)| Ok(Snapshot { at, rank: decode(&text)? })).transpose()
     }
-    pub fn pending(&self) -> Result<Vec<Pending>> {
-        let db = self.db()?;
-        let mut q = db.prepare("SELECT data FROM pending ORDER BY id")?;
-        q.query_map([], |r| r.get::<_, String>(0))?.map(|s| decode(&s?)).collect()
-    }
-    pub fn start(&self, game: &Pending) -> Result<()> {
-        let mut db = self.db()?; let tx = db.transaction()?;
-        let count = tx.execute("INSERT OR IGNORE INTO pending VALUES(?,?)", params![game.id, encode(game)?])?;
-        if count > 0 { tx.execute("INSERT OR IGNORE INTO outbox(unique_key,at,data) VALUES(?,?,?)", params![format!("start/{}", game.id), now(), encode(&Notice::Start(game.clone()))?])?; }
-        tx.commit()?; Ok(())
-    }
-    pub fn update_pending(&self, game: &Pending) -> Result<()> {
-        self.db()?.execute("UPDATE pending SET data=? WHERE id=?", params![encode(game)?, game.id])?;
-        Ok(())
-    }
     pub fn finish(&self, m: &Match) -> Result<()> {
         let mut db = self.db()?; let tx = db.transaction()?;
         let inserted = tx.execute("INSERT OR IGNORE INTO seen VALUES(?,?)", params![m.id, now()])?;
@@ -141,21 +126,12 @@ impl Store {
             tx.execute("INSERT INTO matches(id,ended_at,data) VALUES(?,?,?)", params![m.id, m.ended_at, encode(m)?])?;
             tx.execute("INSERT OR IGNORE INTO outbox(unique_key,at,data) VALUES(?,?,?)", params![format!("result/{}", m.id), now(), encode(&Notice::Result(m.clone()))?])?;
         }
-        tx.execute("DELETE FROM pending WHERE id=?", [&m.id])?;
-        tx.commit()?; Ok(())
-    }
-    pub fn timeout(&self, id: &str) -> Result<()> {
-        let mut db = self.db()?; let tx = db.transaction()?;
-        tx.execute("INSERT OR IGNORE INTO outbox(unique_key,at,data) VALUES(?,?,?)", params![format!("timeout/{id}"), now(), encode(&Notice::Timeout { id: id.into() })?])?;
-        tx.execute("DELETE FROM pending WHERE id=?", [id])?;
-        // Not marked seen: history can still recover a delayed publication later.
         tx.commit()?; Ok(())
     }
     /// Silently drop a game that no longer concerns any tracked player.
     pub fn discard(&self, id: &str) -> Result<()> {
         let mut db = self.db()?; let tx = db.transaction()?;
         tx.execute("INSERT OR IGNORE INTO seen VALUES(?,?)", params![id, now()])?;
-        tx.execute("DELETE FROM pending WHERE id=?", [id])?;
         tx.commit()?; Ok(())
     }
     pub fn get_match(&self, id: Option<&str>) -> Result<Option<Match>> {
@@ -193,10 +169,10 @@ impl Store {
         self.db()?.execute("UPDATE outbox SET attempts=attempts+1,retry_at=? + MIN(900, 5 * (1 << MIN(attempts,7))) WHERE id=?", params![now(), id])?;
         Ok(())
     }
-    pub fn ack(&self, id: i64, game: Option<(&str, u64, u64, bool)>) -> Result<()> {
+    pub fn ack(&self, id: i64, game: Option<(&str, u64, u64)>) -> Result<()> {
         let mut db = self.db()?; let tx = db.transaction()?;
-        if let Some((gid, channel, message, finished)) = game {
-            tx.execute("INSERT INTO messages VALUES(?,?,?,?,?) ON CONFLICT(game_id) DO UPDATE SET channel_id=excluded.channel_id,message_id=excluded.message_id,finished=excluded.finished,at=excluded.at", params![gid, channel.to_string(), message.to_string(), finished, now()])?;
+        if let Some((gid, channel, message)) = game {
+            tx.execute("INSERT INTO messages VALUES(?,?,?,?,?) ON CONFLICT(game_id) DO UPDATE SET channel_id=excluded.channel_id,message_id=excluded.message_id,finished=excluded.finished,at=excluded.at", params![gid, channel.to_string(), message.to_string(), 1, now()])?;
         }
         tx.execute("DELETE FROM outbox WHERE id=?", [id])?;
         tx.commit()?; Ok(())
@@ -228,8 +204,8 @@ impl Store {
         tx.execute("DELETE FROM matches WHERE ended_at<? AND NOT EXISTS(SELECT 1 FROM outbox WHERE unique_key='result/' || matches.id)", [cutoff])?;
         tx.execute("DELETE FROM ranks WHERE at<? AND (puuid,queue,at) NOT IN (SELECT puuid,queue,MAX(at) FROM ranks GROUP BY puuid,queue)", [cutoff])?;
         tx.execute("DELETE FROM baseline WHERE at<?", [cutoff])?;
-        tx.execute("DELETE FROM seen WHERE at<? AND id NOT IN (SELECT id FROM pending) AND NOT EXISTS(SELECT 1 FROM outbox WHERE unique_key='result/' || seen.id)", [cutoff])?;
-        tx.execute("DELETE FROM messages WHERE at<? AND game_id NOT IN (SELECT id FROM pending) AND NOT EXISTS(SELECT 1 FROM outbox WHERE unique_key='result/' || messages.game_id OR unique_key='timeout/' || messages.game_id)", [cutoff])?;
+        tx.execute("DELETE FROM seen WHERE at<? AND NOT EXISTS(SELECT 1 FROM outbox WHERE unique_key='result/' || seen.id)", [cutoff])?;
+        tx.execute("DELETE FROM messages WHERE at<? AND NOT EXISTS(SELECT 1 FROM outbox WHERE unique_key='result/' || messages.game_id)", [cutoff])?;
         tx.execute("DELETE FROM settings WHERE key LIKE 'commentary/%' AND substr(key,12) NOT IN (SELECT id FROM matches)", [])?;
         tx.commit()?;
         db.execute_batch("PRAGMA wal_checkpoint(PASSIVE);")?;

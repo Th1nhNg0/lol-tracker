@@ -6,11 +6,7 @@ retention_days = 180
 
 [riot]
 platform = "vn2"
-# Spectator adds ~1 request per player every spectator_interval_secs. With a development key
-# (100 requests / 2 min) keep it off for rosters above a few players, or raise the interval.
-spectator = false
 history_interval_secs = 60
-spectator_interval_secs = 15
 catch_up_hours = 3
 # Up to 100 recent matches per player per sweep; bounds recovery after downtime.
 history_count = 20

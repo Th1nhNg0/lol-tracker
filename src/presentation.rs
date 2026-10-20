@@ -1,4 +1,4 @@
-use crate::{i18n::{Lang, Msg}, model::{Match, Participant, Pending}};
+use crate::{i18n::{Lang, Msg}, model::{Match, Participant}};
 
 pub fn limit(text: &str, max: usize) -> String {
     let mut units = 0;
@@ -10,9 +10,6 @@ pub fn limit(text: &str, max: usize) -> String {
 // User-controlled names cannot break code blocks, inject markup or ping members.
 pub fn plain(text: &str) -> String {
     text.chars().filter(|c| !c.is_control() && !matches!(c, '`' | '*' | '_' | '~' | '|' | '@' | '<' | '>' | '\\')).take(64).collect()
-}
-pub fn start(game: &Pending, lang: Lang) -> String {
-    format!("{} · {}\n{}", lang.t(Msg::GameStarted), lang.queue(game.queue), game.names.iter().map(|s| plain(s)).collect::<Vec<_>>().join("\n"))
 }
 pub fn outcome(p: &Participant, lang: Lang) -> &'static str { lang.t(if p.win { Msg::Win } else { Msg::Loss }) }
 pub fn commentary(m: &Match, lang: Lang) -> String {

@@ -13,9 +13,6 @@ async fn scoreboard_image(app: &App, game: &Match) -> Option<Vec<u8>> {
         Err(error) => { warn!(%error, "PNG unavailable; retaining text scoreboard fallback"); None }
     }
 }
-fn missing(error: &serenity::Error) -> bool {
-    matches!(error, serenity::Error::Http(HttpError::UnsuccessfulRequest(r)) if r.status_code.as_u16() == 404)
-}
 fn safe_http<T>(value: serenity::Result<T>) -> Result<T> {
     value.map_err(|error| {
         // Discord's status and error text describe the rejection only; they never echo credentials.
@@ -216,9 +213,8 @@ fn channel_opt(opts: &[CommandDataOption]) -> Option<u64> {
 
 /// Why a channel cannot receive tracker messages. `Display` is English for logs.
 pub enum ChannelProblem { Unreachable, NotText, MissingPermissions(Permissions) }
-const REQUIRED: [(Permissions, Msg); 4] = [
-    (Permissions::VIEW_CHANNEL, Msg::PermViewChannel), (Permissions::SEND_MESSAGES, Msg::PermSendMessages),
-    (Permissions::EMBED_LINKS, Msg::PermEmbedLinks), (Permissions::ATTACH_FILES, Msg::PermAttachFiles),
+const REQUIRED: [(Permissions, Msg); 3] = [
+    (Permissions::VIEW_CHANNEL, Msg::PermViewChannel), (Permissions::SEND_MESSAGES, Msg::PermSendMessages), (Permissions::ATTACH_FILES, Msg::PermAttachFiles),
 ];
 impl ChannelProblem {
     fn message(&self, lang: Lang) -> String {
@@ -300,20 +296,18 @@ pub async fn delivery_worker(app: Arc<App>, http: Arc<Http>) -> Result<()> {
 }
 async fn deliver(app: &App, http: &Http, delivery: &crate::store::Delivery) -> Result<()> {
     let lang = app.cfg.language;
-    // A delayed start/timeout must never overwrite an already persisted result.
     match &delivery.notice {
-        Notice::Start(game) if app.store.seen(&game.id)? || !app.store.pending()?.iter().any(|p| p.id == game.id) => {
-            app.store.ack(delivery.id, None)?; return Ok(());
+        Notice::Result(m) => {
+            let channel = app.channel(false)?; ensure!(channel != 0, "Game channel missing");
+            // The result is the image; commentary joins it later. Text stands in only when the image failed.
+            let mut create = CreateMessage::new().allowed_mentions(mentions());
+            match scoreboard_image(app, m).await {
+                Some(image) => create = create.add_file(CreateAttachment::bytes(image, "scoreboard.png")),
+                None => create = create.content(view::commentary(m, lang)),
+            }
+            let message = safe_http(ChannelId::new(channel).send_message(http, create).await)?;
+            app.store.ack(delivery.id, Some((&m.id, channel, message.id.get())))?;
         }
-        Notice::Timeout { id } if app.store.seen(id)? => {
-            app.store.ack(delivery.id, None)?; return Ok(());
-        }
-        _ => (),
-    }
-    let (game_id, finished, text, result) = match &delivery.notice {
-        Notice::Start(game) => (Some(game.id.as_str()), false, view::limit(&view::start(game, lang), 1900), None),
-        Notice::Result(m) => (Some(m.id.as_str()), true, String::new(), Some(m)),
-        Notice::Timeout { id } => (Some(id.as_str()), true, lang.t(Msg::ResultUnavailable).into(), None),
         Notice::Report { text, report } => {
             let channel = app.channel(true)?; ensure!(channel != 0, "Rank channel missing");
             // The card is rendered at delivery, like result scoreboards; text is the fallback.
@@ -331,28 +325,9 @@ async fn deliver(app: &App, http: &Http, delivery: &crate::store::Delivery) -> R
             };
             safe_http(ChannelId::new(channel).send_message(http, builder.allowed_mentions(mentions())).await)?;
             app.store.ack(delivery.id, None)?;
-            return Ok(());
+            app.store.ack(delivery.id, None)?;
         }
-    };
-    let png = if let Some(game) = result { scoreboard_image(app, game).await } else { None };
-    if let Some(id) = game_id
-        && finished
-            && let Some((channel, message)) = app.store.message(id)? {
-                let mut edit = EditMessage::new().content(&text).allowed_mentions(mentions()).attachments(EditAttachments::new());
-                if let Some(image) = &png { edit = edit.new_attachment(CreateAttachment::bytes(image.clone(), "scoreboard.png")); }
-                match ChannelId::new(channel).edit_message(http, MessageId::new(message), edit).await {
-                    Ok(_) => { app.store.ack(delivery.id, Some((id, channel, message, true)))?; return Ok(()); }
-                    Err(error) if missing(&error) => (), // Only a definite deletion permits a new message.
-                    Err(_) => bail!("Discord edit failed"),
-                }
-            }
-    let channel = app.channel(false)?; ensure!(channel != 0, "Game channel missing");
-    // The result is the image; commentary joins it later. Text stands in only when the image failed.
-    let text = match (result, &png) { (Some(m), None) => view::commentary(m, lang), _ => text };
-    let mut create = CreateMessage::new().content(text).allowed_mentions(mentions());
-    if let Some(image) = png { create = create.add_file(CreateAttachment::bytes(image, "scoreboard.png")); }
-    let message = safe_http(ChannelId::new(channel).send_message(http, create).await)?;
-    app.store.ack(delivery.id, game_id.map(|id| (id, channel, message.id.get(), finished)))?;
+    }
     Ok(())
 }
 

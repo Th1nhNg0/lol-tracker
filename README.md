@@ -1,205 +1,211 @@
+<div align="center">
+
 # LoL Tracker
 
-A standalone Rust League of Legends tracker for one Discord server. Riot supplies the facts; deterministic summaries work without an AI account, an agent, or any external runtime.
+**A self-hosted Discord bot for friend groups who play League of Legends together.**
+It watches your ranked games, posts a clean scoreboard the moment each one ends,
+adds optional AI commentary, and sums up the day, week and month in LP.
+
+[![Rust](https://img.shields.io/badge/Rust-2024-orange?logo=rust)](https://www.rust-lang.org/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![Languages](https://img.shields.io/badge/bot%20language-English%20%7C%20Ti%E1%BA%BFng%20Vi%E1%BB%87t-green)](#configuration)
+
+<img src="docs/images/scoreboard-en.webp" alt="Match scoreboard" width="860">
+
+</div>
 
 ## Features
 
-- Match-V5 history polling, restart catch-up and persistent duplicate suppression.
-- Optional Spectator start announcements, edited into final results when available.
-- Full-team scoreboards, individual outcomes, remakes, K/D/A, CS, damage, gold, vision, objectives and item/spell/rune IDs.
-- Native Rust PNG scoreboards with champion splash art, portraits, spell/rune/item icons, compact statistics and text fallback; no browser.
-- Solo/Duo and Flex ranks, observed rank history, per-match LP changes (Spectator or history mode), with unknown shown instead of guessed values.
-- Last-game, rank and roster commands; administrator player management with Riot ID autocomplete.
-- Deterministic, role-aware match verdict (MVP and worst player) that needs no LLM.
-- Daily, weekly (Sunday) and monthly (last day of the month) report cards: group LP, honours, per-player statistics, rank and LP change per queue, and same-team pairs. Text fallback.
-- Result posts are the scoreboard image plus optional AI commentary; no buttons, charts or extra data views.
-- Full Vietnamese/English localization (`language = "vi"` or `"en"`): messages, images, reports and errors, plus localized slash-command descriptions that follow each member's Discord client language. No privileged message-content intent.
-- SQLite state and a retryable Discord outbox. Optional, anonymized AI commentary using OpenAI-compatible APIs.
+- **Post-game scoreboard** – a single image with all ten players: KDA, damage, damage taken, CS, gold, vision and items, plus a team gold and objectives strip (dragons, Baron, Herald, towers, inhibitors).
+- **LP and rank per game** – Solo/Duo and Flex, with the LP gained or lost shown next to each tracked player. `MVP` and `WORST` labels sit on the portraits.
+- **Daily, weekly and monthly reports** – one LP bar per player, the biggest climber and the biggest drop framed, and six honours (kills, deaths, damage, farm, vision, win rate) on weekly and monthly cards.
+- **Optional AI commentary** – a short, funny line per tracked player with a title and emoji, written by any OpenAI-compatible model in the voice *you* define in a `prompt.md`. Custom Discord emojis are supported.
+- **Slash commands** – `/lastgame`, `/rank`, `/players` and admin `/config` for channels, roster and on-demand reports.
+- **English and Vietnamese** – messages, images and slash-command descriptions.
+- **Small and self-contained** – one Rust binary. SQLite is bundled, fonts are embedded, images are drawn with `resvg`. No browser, Python or Node. Around 20 MB of RAM.
 
-This is a fresh implementation, not a distribution of the reference application. See [plans.md](plans.md) for the architecture and decisions, and [REVIEW.md](REVIEW.md) for the technical audit and feature-parity record. Report image cards, videos, narration, screenshot analysis, custom guild emoji and private inside jokes are intentionally **not** included. No legacy history or source is bundled.
+## Screenshots
 
-## Requirements
+<table>
+<tr>
+<td width="50%"><b>Daily report</b><br><img src="docs/images/report-daily-en.webp" alt="Daily report"></td>
+<td width="50%"><b>Weekly report</b><br><img src="docs/images/report-weekly-en.webp" alt="Weekly report"></td>
+</tr>
+<tr>
+<td colspan="2"><b>Monthly report</b> (same layout as weekly, over the calendar month)<br><img src="docs/images/report-monthly-en.webp" alt="Monthly report" width="50%"></td>
+</tr>
+</table>
 
-- Current stable Rust (edition 2024), Cargo and a C compiler for bundled SQLite.
-- A Riot developer API key with access to Account-V1, Match-V5 and League-V4; Spectator-V5 access only if enabled. Development keys normally expire after 24 hours. Obtain/renew keys at <https://developer.riotgames.com/>.
-- For Discord mode: a bot token, one guild and target text channels. Invite with `bot` and `applications.commands` scopes. Grant **View Channel**, **Send Messages**, **Embed Links** and **Attach Files** in the target channels; startup and `/config` verify these and refuse a channel that lacks them. No administrator privilege is needed by the bot.
-- An LLM key is **not** required. No Python, Node, Hermes, browser, FFmpeg or graphics service is needed at runtime.
-- PNG rendering bundles fresh Be Vietnam Pro Regular/Bold fonts under SIL OFL 1.1; provenance and license are in `assets/fonts/`. Riot artwork is fetched from public Data Dragon endpoints without sending the Riot API key. Missing artwork degrades to placeholders.
+Everything above is rendered from anonymised sample data. Set `language = "vi"` for Vietnamese output.
 
-## Setup
+### What a result looks like
 
-Keep actual credentials, player identities and configuration outside this repository, preferably in an owner-only directory. Example using a generic private directory:
+The scoreboard is posted first, then the AI commentary is edited into the message text a few seconds later:
+
+> 🛡️ **Atlas** — *Stone Wall*: Ornn soaked 48k damage and still showed up for 18 assists, but Malphite out-traded him all game.
+> 🔥 **Pixel** — *Jungle Furnace*: 20 takedowns, 13 deaths. The fire was real, the exit wasn't.
+> 🌙 **Zephyr** — *Midnight Shift*: Even farm with Yasuo, three extra deaths. Quiet game, loud ending.
+>
+> **Key player:** Juniper — 43k damage from support, the only reason it was close.
+
+*(Illustrative text. The tone is entirely controlled by your `prompt.md`.)*
+
+## Quick start
+
+### Requirements
+
+- A recent stable **Rust** toolchain (edition 2024) and a C compiler (for the bundled SQLite).
+- A **Riot developer API key** from <https://developer.riotgames.com/> with Account-V1, Match-V5 and League-V4. Development keys expire after 24 hours; apply for a personal or production key for a long-running bot.
+- A **Discord bot** invited with the `bot` and `applications.commands` scopes. In the channels it posts to it needs **View Channel**, **Send Messages** and **Attach Files**. No administrator rights and no privileged intents; only the `GUILDS` intent is used.
+
+### Install and configure
 
 ```sh
+git clone https://github.com/Th1nhNg0/lol-tracker.git
+cd lol-tracker
+cargo build --release --locked
+
+# Keep secrets and player names outside the repository.
 umask 077
-mkdir -p "$HOME/.config/lol-tracker"
-cp config.example.toml "$HOME/.config/lol-tracker/config.toml"
-cp players.example.json "$HOME/.config/lol-tracker/players.json"
-cp .env.example "$HOME/.config/lol-tracker/.env"
+mkdir -p ~/.config/lol-tracker
+cp config.example.toml ~/.config/lol-tracker/config.toml
+cp players.example.json ~/.config/lol-tracker/players.json
+cp .env.example ~/.config/lol-tracker/.env
 ```
 
-Edit these private files:
+1. `.env` – set `RIOT_API_KEY` and `DISCORD_TOKEN`.
+2. `config.toml` – set `riot.platform` (for example `vn2`, `na1`, `euw1`), `discord.guild_id`, `games_channel_id` and `rank_channel_id`.
+3. `players.json` – your friends' Riot IDs, with an optional display nickname:
 
-1. `.env`: set `RIOT_API_KEY` and `DISCORD_TOKEN` (omit Discord token for tracking-only mode).
-2. `config.toml`: set Riot platform, guild ID, games channel and optionally rank channel. Leave `llm.enabled = false` to use deterministic commentary only. Spectator is off by default, matching the reference deployment's active behavior.
-3. `players.json`: use real Riot IDs, optionally with display nicknames:
+   ```json
+   [
+     { "game_name": "Nova", "tag_line": "VN2", "nickname": "Nova" }
+   ]
+   ```
 
-```json
-[
-  { "game_name": "ExamplePlayer", "tag_line": "EXAMPLE", "nickname": "Player" }
-]
-```
+   This file only seeds a *new* database. After that, use `/config addplayer` and `/config removeplayer`.
 
-Build and validate locally:
+### Check, then run
 
 ```sh
-cargo build --locked
-./target/debug/lol-tracker \
-  --config "$HOME/.config/lol-tracker/config.toml" \
-  --env-file "$HOME/.config/lol-tracker/.env" check
+bin=./target/release/lol-tracker
+args="--config $HOME/.config/lol-tracker/config.toml --env-file $HOME/.config/lol-tracker/.env"
+
+$bin $args check                    # validate config and storage, no network
+$bin $args probe                    # read-only check of the Riot key and Discord token
+$bin $args run --register-commands  # first run: also installs the slash commands
+$bin $args run                      # every later start
 ```
 
-`check` is the default when no subcommand is provided. It validates configuration and creates/seeds **local** storage without network access. It never prints credential values. Environment variables override the explicitly supplied dotenv file; no implicit search through parent directories or agent stores occurs.
+New players are baselined silently the first time they are seen, so the bot never replays old games. Only games that ended within `catch_up_hours` (default 3) of a sweep are announced.
 
-Optional read-only credential check:
+> **Run only one instance per Discord application and database.** For experiments, use a separate database and `run --no-discord`, which tracks without touching Discord and keeps notifications queued.
 
-```sh
-./target/debug/lol-tracker \
-  --config "$HOME/.config/lol-tracker/config.toml" \
-  --env-file "$HOME/.config/lol-tracker/.env" probe
-```
+## Slash commands
 
-`probe` resolves only the first configured Riot account and checks the Discord current-bot REST endpoint if a token exists. It does not start a gateway session, install commands, read chat or send messages. Success verifies credentials/routing, not every endpoint permission or future availability.
+| Command | What it does | Who |
+|---|---|---|
+| `/lastgame` | Posts the latest scoreboard, with AI commentary when enabled | everyone |
+| `/rank` | Current Solo/Duo and Flex rank of everyone | everyone |
+| `/players` | The tracked roster | everyone (private reply) |
+| `/config channel` | Set the channel for match results | Manage Server |
+| `/config rankchannel` | Enable, disable or move the report channel | Manage Server |
+| `/config addplayer` | Track an account by `Name#Tag` | Administrator |
+| `/config removeplayer` | Stop tracking an account (with autocomplete) | Administrator |
+| `/config rankreport` | Post a daily, weekly or monthly report now | Manage Server |
 
-## Run
+Reports are posted automatically once a day at `reports.hour:minute` (default 23:59, `Asia/Ho_Chi_Minh`): the daily report on most days, the weekly one on Sundays, the monthly one on the last day of the month.
 
-**Do not run two bot instances against the same Discord application or database.** For safe local development while another deployment is running, use tracking-only mode. Never use `--register-commands` on the live application's token merely to verify a build.
+## Configuration
 
-```sh
-# Collect locally; no Discord gateway, command writes, messages or LLM calls.
-./target/debug/lol-tracker --config /path/to/private/config.toml \
-  --env-file /path/to/private/.env run --no-discord
+Relative paths are resolved against the config file's directory. Unknown keys are rejected so typos fail loudly. See [`config.example.toml`](config.example.toml) for the annotated file.
 
-# One local collection sweep, then exit. This still updates local SQLite state.
-./target/debug/lol-tracker --config /path/to/private/config.toml \
-  --env-file /path/to/private/.env run --no-discord --once
+| Key | Default | Meaning |
+|---|---|---|
+| `language` | `vi` | `vi` or `en` for all bot output |
+| `players_file` | `players.json` | Seed roster for a new database |
+| `database` | `data/tracker.db` | SQLite file |
+| `retention_days` | `180` | How long old matches and snapshots are kept |
+| `riot.platform` | `vn2` | Riot platform routing value |
+| `riot.history_interval_secs` | `60` | Seconds between match-history sweeps |
+| `riot.catch_up_hours` | `3` | Oldest game that is still announced after downtime |
+| `riot.history_count` | `20` | Recent matches fetched per player per sweep |
+| `riot.request_interval_ms` | `1250` | Minimum gap between Riot requests (fits a development key) |
+| `discord.guild_id` | – | The one server the bot serves |
+| `discord.games_channel_id` | – | Where results are posted |
+| `discord.rank_channel_id` | `0` | Where reports are posted (`0` disables reports) |
+| `reports.enabled`, `monthly`, `timezone`, `hour`, `minute` | on, on, `Asia/Ho_Chi_Minh`, `23`, `59` | Report schedule |
+| `llm.*` | disabled | See below |
 
-# Intentional Discord operation, only when ready to use this bot deployment.
-# First run: explicitly install this tracker's guild slash commands.
-./target/debug/lol-tracker --config /path/to/private/config.toml \
-  --env-file /path/to/private/.env run --register-commands
+Secrets are read only from the environment or the dotenv file you pass with `--env-file`: `RIOT_API_KEY`, `DISCORD_TOKEN` and, optionally, `LLM_API_KEY`.
 
-# Subsequent starts: no command registration writes.
-./target/debug/lol-tracker --config /path/to/private/config.toml \
-  --env-file /path/to/private/.env run
-```
+## AI commentary
 
-Ctrl-C or SIGTERM shuts down workers; pending results and notifications remain in SQLite. For an optimized binary, use `cargo build --release --locked` and `target/release/lol-tracker` with the same arguments. No deployment scripts or service modifications are included.
-
-**Tracking-only mode retains notifications in the outbox.** Starting Discord mode later will deliver those queued results/reports. Use a separate database when collecting disposable development data rather than later pointing it at your real Discord server.
-
-### Render a scoreboard preview
-
-```sh
-# Local, Git-ignored config.toml/.env. Save a private PNG without sending.
-./target/debug/lol-tracker --env-file .env render-scoreboard \
-  --output data/scoreboard-preview.png
-
-# Explicitly post ONE image. No gateway or command registration.
-./target/debug/lol-tracker --env-file .env render-scoreboard \
-  --output data/scoreboard-preview.png --post
-```
-
-```sh
-# The scoreboard image in both languages, for review.
-./target/debug/lol-tracker --env-file .env render-scoreboard \
-  --output data/preview/scoreboard.png --language all
-```
-
-`--language vi|en|all` overrides the configured language; `all` writes one file per language (`-vi`/`-en` suffixes) and, with `--post`, posts one preview per language. Use `--match-id PLATFORM_matchnumber` for an exact real match. Otherwise use the latest locally stored match or, if none is stored yet, the newest published match among one recent ID per roster member. Preview fetching does not import old matches, change baselines, drain notifications or call an LLM. Images are labeled as previews and use the configured report timezone. Champion portraits, splash art and spell/rune/item icons come from Riot Data Dragon. The keyless artwork cache sits beside the database in `artwork/`, with 24-hour metadata caching and a 64 MiB/30-day file budget enforced during rendering. No Riot artwork is committed or bundled with source. An external private output path is also supported.
-
-### Localization
-
-All user-facing text lives in [`src/i18n.rs`](src/i18n.rs): one `Msg` catalog in which every entry has exactly one string per language, plus queue, role, objective, monster and building names, and date formats. A missing translation is a compile error, so adding a language means adding a `Lang` variant and one column. Logs, CSV headers and the LLM prompt stay English; KDA, CS, KP, LP and champion names are not translated. Command errors meant for members are localized; unexpected internal errors show a localized generic message and are logged in English. Slash-command descriptions are registered in English (Discord's default) with Vietnamese localizations, so re-run `--register-commands` after upgrading.
-
-Normal result notifications and `/lastgame` reuse the renderer. The image is the result; a short text summary appears only if the image cannot be drawn.
-
-### Render a report card preview
-
-```sh
-# Weekly card and text in both languages. Never posts.
-./target/debug/lol-tracker --env-file .env render-report \
-  --period weekly --language all --output data/preview/report.png
-```
-
-`--period daily|weekly|monthly`. Uses stored matches for the window; if none are stored yet (a fresh database), it fetches up to `--max-matches` (default 15) recent real matches read-only and does not track them (raw match data is cached under `data/preview-matches/` so repeated previews are instant). LP changes need rank snapshots spanning the window, so a new database shows them as unknown until the bot has been observing ranks for a full period.
-
-### Discord commands
-
-All commands are guild-restricted. `/lastgame` and `/rank` reply in the channel (as in the original bot); `/players` and every `/config` reply are private to the invoking member. Result/report notifications go to the configured channels. Mentions are disabled.
-
-| Command | Behavior | Permission |
-| --- | --- | --- |
-| `/lastgame` | Latest scoreboard image, with AI commentary when enabled | Any member |
-| `/rank` | Fetch current tracked Solo/Duo and Flex ranks | Any member |
-| `/players` | Current roster | Any member |
-| `/config channel channel:…` | Change game notification channel | Manage Server |
-| `/config rankchannel [enabled:…] [channel:…]` | Configure scheduled reports | Manage Server |
-| `/config addplayer riot_id:Name#Tag [nickname:…]` | Resolve, baseline and persist an account | Administrator |
-| `/config removeplayer riot_id:Name#Tag` | Stop tracking an account (Riot ID autocompletes) | Administrator |
-| `/config rankreport period:daily\|weekly\|monthly` | Queue an immediate report card | Manage Server |
-
-Permissions are checked in the handler, not just the command picker. At most two slow interactions run at once. Registration updates only this project's four named guild commands; it does not clear other guild commands or any global commands. Previously registered global commands from another implementation must be managed separately by an operator. After upgrading from a build without `removeplayer` autocomplete, start once with `--register-commands` to update the command definitions.
-
-### Configuration and state
-
-`config.example.toml` lists all settings. Paths are relative to the config file, not the working directory. A process handles one platform and one guild; use separate configuration/databases for others. The database records these bindings and rejects accidental reuse with a different platform/guild.
-
-- **Roster:** `players_file` seeds a new database once. After that, Discord administrator commands update SQLite; editing the seed file does not overwrite those changes. No live config reload; restart after TOML/secret changes. To reset a disposable database, stop the process and move/remove its database plus associated WAL/SHM files; this also discards history and queued work.
-- **Channels:** persisted `/config` channel overrides take precedence over TOML. A zero rank channel suppresses automatic scheduling until set. Report enablement can also be overridden in SQLite.
-- **Polling:** history defaults to 60 seconds, 20 recent IDs per player; optional Spectator defaults to 15 seconds. All Riot requests share one pacing gate (`riot.request_interval_ms`, default 1250 ms, which fits a development key's 100 requests / 2 min) plus Retry-After backoff. Spectator with a large roster needs a production key or a longer interval. Rank refreshes run every 30 minutes (first, before any history sweep) and after ranked results. A failing step (e.g. Riot outage) is logged and retried without stopping the others.
-- **First launch/new player:** baseline existing history silently. Subsequent starts recover unseen results within `catch_up_hours` (default three) and the configured ID-count window. This is bounded catch-up, not a complete historical backfill. Baselines are per-account so a newly added account cannot suppress another member's shared result.
-- **LP:** the per-match change compares a "before" rank with the rank fetched just after the game. "Before" is the Spectator pre-game rank or, in history mode, the newest snapshot taken at or before the game start **by the current process**, so a restart never folds downtime games into one delta. The post-game lookup must happen within 20 minutes of the game ending; League-V4 lag is retried briefly. An unchanged rank shows unknown rather than zero. Reports compare observed snapshots and label partial baselines. Cross-tier LP uses a normalized tier/division value; it is not MMR.
-- **Reports:** posted at the configured local time (default 23:59 Asia/Ho_Chi_Minh) as a PNG card with a text fallback. Daily and weekly reports use rolling 24-hour/seven-day windows; the monthly report covers the calendar month so far. Sunday's weekly report replaces the daily one; on the last day of the month the monthly report replaces the daily one, and if that day is a Sunday both the weekly and monthly reports are posted (`reports.monthly = false` disables monthly reports). Weekly and monthly cards add honours (most kills, most deaths, top damage per game, CS/min, vision/min, best win rate with minimum game counts) and same-team pairs. Remakes do not count. LP change per queue compares the rank before the window with the latest one; a single observation shows as unknown, never as zero. Report dates and queued payloads persist atomically. Startup after today's scheduled time can catch up today's report, but not every missed calendar day.
-- **Retention:** old delivered match data, snapshots and deduplication rows are trimmed after `retention_days`; latest rank snapshots, pending games and unsent result data survive. SQLite reuses freed pages; this is age retention, not a hard disk quota. Back up SQLite consistently (stop this local instance or use SQLite's backup facility), including uncheckpointed WAL data.
-- **Delivery:** each notification retries independently with bounded backoff, so one failing channel does not block other notifications. Stored results and delivery intent are atomic, but Discord acknowledgement is not: a crash after a successful send can still cause a duplicate. Sending is **at-least-once**, not exactly-once. Edits only fall back to a new message on a definite missing-message response.
-- **Unavailable data:** Riot custom/private games and unavailable timelines cannot be reconstructed from history. A failed API call never implies a player is out of game. If publication remains unavailable, a timeout message leaves history polling enabled.
-
-## Optional LLM
-
-The bot is fully functional with this section untouched:
+Off by default; the bot works fully without it. To enable it, point it at any OpenAI-compatible chat-completions endpoint:
 
 ```toml
 [llm]
-enabled = false
-provider = "openrouter"
-model = ""
-base_url = "https://openrouter.ai/api/v1"
-timeout_secs = 15
+enabled = true
+model = "gpt-4o-mini"
+base_url = "https://api.openai.com/v1"      # OpenRouter, Ollama (http://localhost:11434/v1), a local gateway...
+prompt_file = "prompt.md"                   # optional persona and style
+send_names = false                          # true lets the prompt use inside jokes about your friends
+timeout_secs = 90
 ```
 
-To enable, set `enabled = true`, choose a `model`, and set the provider's **API root** as `base_url` (the application appends `/chat/completions`): `https://openrouter.ai/api/v1` for OpenRouter, `https://api.openai.com/v1` for OpenAI, or any other OpenAI-compatible HTTPS endpoint. Set `LLM_API_KEY` privately. A server on the same machine (Ollama, llama.cpp, LM Studio) may use `http://localhost:PORT/v1` and needs no key. `provider` is a descriptive label; there is one provider-independent HTTP contract and no provider-specific extensions. Replies may be a bare JSON array or one wrapped in a Markdown fence. Comments are sanitized and truncated; links, missing/duplicate players, `length`/`content_filter` stops or timeouts discard the AI text.
+- Put `LLM_API_KEY` in `.env` (not needed for a server on `localhost`).
+- Copy [`prompt.example.md`](prompt.example.md) to `prompt.md` and make it yours. It controls tone and style only; the JSON reply format is enforced by the bot.
+- **Custom emojis:** list Discord emoji codes such as `<:name:123456789012345678>` in the prompt file with a short description of each. The bot only accepts codes it finds there, so the model cannot invent one. Emojis uploaded as *application emojis* work everywhere.
+- The model receives final statistics of all ten players (the other five are context), the last few comments so it avoids repeating itself, and display names only if `send_names = true`. Never Riot IDs, PUUIDs or Discord IDs. That data goes to the provider you choose.
+- Games without commentary, such as imported history, get theirs the first time someone runs `/lastgame`.
 
-### Persona and style (optional)
+## Run it as a service
 
-Set `prompt_file = "prompt.md"` under `[llm]` to control the commentary voice. Copy [`prompt.example.md`](prompt.example.md), edit it, and keep your copy private (`prompt.md` is git-ignored; relative paths resolve against the config file). Without it a short built-in style is used. The file only sets tone and style: the output contract (a JSON array of `player`, `title`, `comment`, `emoji`) is appended by the bot. Each reply line renders as `emoji Name — title: comment`. The model also receives the last few comments so it avoids repeating jokes, and all ten participants' statistics (the other five are context only). `send_names = true` additionally sends tracked players' display names so the prompt can use inside jokes; it is off by default. `/lastgame` generates and stores commentary on first use for games that have none, such as imported history.
+```ini
+# /etc/systemd/system/lol-tracker.service
+[Unit]
+Description=LoL tracker Discord bot
+After=network-online.target
+Wants=network-online.target
 
-Core result delivery happens first. A separate worker then edits the AI commentary into the message under the scoreboard image; without an LLM the post is just the image. Requests carry numeric participant labels, champions, roles, teams and final statistics, never Riot IDs, PUUIDs, Discord IDs, secrets or chat history; display names only with `send_names = true`. That data still goes to your chosen provider, so review its terms and privacy policy. Missing credentials, unsupported models, malformed replies, provider failures or edit failures leave the image-only post intact. No LLM is used by commands, collection, reports, permissions or state transitions. AI commentary may be inaccurate.
+[Service]
+WorkingDirectory=/opt/lol-tracker
+ExecStart=/opt/lol-tracker/lol-tracker --config /opt/lol-tracker/config.toml --env-file /opt/lol-tracker/.env run
+Restart=always
+RestartSec=10
+MemoryMax=300M
 
-### ChatGPT account sign-in investigation
+[Install]
+WantedBy=multi-user.target
+```
 
-Current first-party documentation describes official **Sign in with ChatGPT** for eligible open-source/local apps, including explicit ChatGPT-plan inference authorization. Identity sign-in alone is insufficient, and ChatGPT Plus does **not** give general API-key access. That integration needs dynamic client registration, PKCE, validated ID tokens, dedicated scopes, token refresh and account/usage management; availability and limitations may change.
+State lives in one SQLite file in WAL mode. To back it up, stop the service or use SQLite's `.backup`. Pending Discord posts are kept in the database and retried, so a restart or an outage loses nothing.
 
-This release deliberately uses the simpler API-key integration and does not implement OAuth. It never reads browser cookies, ChatGPT sessions, another application's OAuth credentials or agent credential stores. This is a design choice, **not** a claim that no official sign-in flow exists. See the [official open-source overview](https://developers.openai.com/siwc/token-sharing-open-source) and [sign-in contract](https://developers.openai.com/siwc/token-sharing-open-source/sign-in).
+## Development
 
-## Repository and licensing
+```sh
+cargo build --locked
+./target/debug/lol-tracker --env-file .env render-scoreboard --language all --output data/board.png
+./target/debug/lol-tracker --env-file .env render-report --period weekly --language all --output data/report.png
+```
 
-`src/` contains focused configuration, Riot, storage, tracking, presentation, reporting, Discord and optional LLM modules. Cargo.lock pins dependencies. No tests, CI/CD, benchmarks or extra framework/tooling are included.
+`render-scoreboard` draws a stored or recent real match to a PNG (add `--post` to send one image to the games channel). `render-report` does the same for a report and prints its text form. Neither imports matches, touches baselines or calls an LLM.
 
-The new code is MIT-licensed; see [LICENSE](LICENSE). No license file was found for the reference application, so its implementation/assets were not reused or relicensed. Dependencies retain their own licenses. Riot Games, League of Legends, OpenAI and Discord marks belong to their owners; this is an unofficial community tool, not endorsed by them. Follow Riot's developer policies and register/obtain an appropriate key before distributing a hosted service.
+| Path | Role |
+|---|---|
+| `src/tracker.rs` | History sweeps, rank snapshots, LP attribution |
+| `src/riot.rs` | Rate-limited Riot client |
+| `src/store.rs` | SQLite storage and the delivery outbox |
+| `src/discord.rs` | Gateway, slash commands, delivery and commentary workers |
+| `src/render.rs`, `src/report_card.rs`, `src/render_assets.rs` | SVG images rasterised by `resvg`; Data Dragon and objective artwork cache |
+| `src/reports.rs`, `src/presentation.rs` | Report aggregation and the role-aware MVP / worst-player score |
+| `src/llm.rs` | Optional commentary client |
+| `src/i18n.rs` | Compile-checked English and Vietnamese catalogue |
 
-Bundled Be Vietnam Pro fonts retain their SIL Open Font License; see [`assets/fonts/OFL.txt`](assets/fonts/OFL.txt) and the pinned upstream provenance in [`assets/fonts/README.md`](assets/fonts/README.md). Runtime Riot artwork is not covered by this repository's MIT license. Review [Riot's fan-project policy](https://www.riotgames.com/en/legal) and [Data Dragon documentation](https://developer.riotgames.com/docs/lol) before distributing or hosting.
+Artwork (champions, items, objective icons) is fetched from public Data Dragon and Community Dragon URLs at render time and cached next to the database; nothing from Riot is committed. If it cannot be fetched, images fall back to placeholders. No Riot API key is ever sent to those hosts.
 
-> LoL Tracker was created under Riot Games' "Legal Jibber Jabber" policy using assets owned by Riot Games. Riot Games does not endorse or sponsor this project.
+## Legal
 
-Before publishing your own copy, inspect the file list and Git history. Never add `.env`, actual configuration/rosters, SQLite data, the private reference snapshot, generated user data or credentials—even if you later delete them. This project does not publish or push anything automatically.
+LoL Tracker is not endorsed by Riot Games and does not reflect the views or opinions of Riot Games or anyone officially involved in producing or managing Riot Games properties. Riot Games and all associated properties are trademarks or registered trademarks of Riot Games, Inc.
+
+The bundled Be Vietnam Pro fonts are licensed under the SIL Open Font License 1.1 ([`assets/fonts`](assets/fonts)). The code is released under the [MIT License](LICENSE).
