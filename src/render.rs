@@ -5,11 +5,8 @@ use resvg::usvg::fontdb;
 use serde_json::Value;
 use std::{collections::HashSet, fmt::Write, path::Path, sync::{Arc, OnceLock}};
 
-/// Splash darkening (left to right) and bottom fade for the report hero.
-pub(crate) const HERO_DEFS: &str = "<defs><linearGradient id='heroShade'><stop stop-color='#0b1220' stop-opacity='.98'/><stop offset='.42' stop-color='#0b1220' stop-opacity='.8'/><stop offset='1' stop-color='#0b1220' stop-opacity='.2'/></linearGradient><linearGradient id='fade' x2='0' y2='1'><stop stop-color='#0b1220' stop-opacity='0'/><stop offset='1' stop-color='#0b1220'/></linearGradient></defs>";
 pub(crate) const TEXT: &str = "#f0f1f7";
 pub(crate) const DIM: &str = "#9ca8bb";
-pub(crate) const FAINT: &str = "#69788e";
 pub(crate) const GOLD: &str = "#edc976";
 pub(crate) const GREEN: &str = "#6cdbb0";
 pub(crate) const RED: &str = "#fa8297";

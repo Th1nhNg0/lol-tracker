@@ -25,9 +25,9 @@ const MUTED: &str = "#9aa6c0";
 const OBJECTIVES: [(&str, &str); 5] = [("dragon", "dragon"), ("baron", "baron"), ("herald", "riftHerald"), ("tower", "tower"), ("inhibitor", "inhibitor")];
 
 /// Row and header fills of a team block, tinted by the team's result.
-struct Block { header: &'static str, title: &'static str, rows: [&'static str; 2], tracked: &'static str }
-const VICTORY: Block = Block { header: "#16213d", title: "#6fa0ff", rows: ["#1d2c4f", "#223259"], tracked: "#2f4a86" };
-const DEFEAT: Block = Block { header: "#2b1824", title: "#ff7a8c", rows: ["#3a2030", "#43263a"], tracked: "#5d2f48" };
+pub(crate) struct Block { pub header: &'static str, pub title: &'static str, pub rows: [&'static str; 2], pub tracked: &'static str }
+pub(crate) const VICTORY: Block = Block { header: "#16213d", title: "#6fa0ff", rows: ["#1d2c4f", "#223259"], tracked: "#2f4a86" };
+pub(crate) const DEFEAT: Block = Block { header: "#2b1824", title: "#ff7a8c", rows: ["#3a2030", "#43263a"], tracked: "#5d2f48" };
 
 pub fn scoreboard(game: &Match, lang: Lang, timezone: &str, preview: bool, art: &Assets) -> Result<Vec<u8>> {
     ensure!(!game.participants.is_empty() && game.participants.len() <= 32, "Unsupported scoreboard size");
@@ -38,7 +38,7 @@ pub fn scoreboard(game: &Match, lang: Lang, timezone: &str, preview: bool, art: 
     teams.sort_by_key(|(id, rows)| (!rows.iter().any(|p| p.tracked), *id));
     for (_, rows) in &mut teams { rows.sort_by_key(|p| p.id); }
     let summary = teams.len() >= 2;
-    let height = HEAD + teams.iter().map(|(_, rows)| TEAM_H + ROW * rows.len() as u32).sum::<u32>() + if summary { SUMMARY_H } else { 0 } + 12;
+    let height = HEAD + teams.iter().map(|(_, rows)| TEAM_H + ROW * rows.len() as u32).sum::<u32>() + if summary { SUMMARY_H } else { 0 };
     ensure!(height <= 5000, "Scoreboard exceeds image bounds");
     let mut cv = Canvas { clips: 0, svg: format!("<svg xmlns='http://www.w3.org/2000/svg' width='{W}' height='{height}'><g font-family='Be Vietnam Pro,DejaVu Sans,sans-serif'>") };
     cv.rect(0, 0, W, height, 0, "#0b1020");
@@ -167,23 +167,26 @@ fn spell_rune(cv: &mut Canvas, p: &Participant, y: u32, art: &Assets) {
     if let Some(id) = p.runes.get(1) { cv.image(art.image(&format!("rune:{id}")), SPELL_X + 29, y + 27, 16, 16, 8); }
 }
 
-/// Tracked players: rank with a tier gem and the LP change. Everyone else: champion and role.
+/// A small diamond in the colour of the rank's tier.
+pub(crate) fn tier_gem(cv: &mut Canvas, x: u32, base: u32, tier: &str) {
+    let _ = write!(cv.svg, "<polygon points='{},{} {},{} {},{} {},{}' fill='{}'/>", x + 5, base - 11, x + 10, base - 5, x + 5, base + 1, x, base - 5, tier_color(tier));
+}
+
+/// Rank with a tier gem (and the LP change for tracked players); champion and role when the rank is unknown.
 fn identity(cv: &mut Canvas, p: &Participant, base: u32, art: &Assets, lang: Lang) {
     let mut x = NAME_X;
-    if !p.tracked {
+    let Some(rank) = &p.rank_after else {
         let champion = art.names.get(&p.champion).map(String::as_str).unwrap_or(&p.champion);
         let text = match lang.role(&p.role) { "" => champion.to_owned(), role => format!("{champion} · {role}") };
         cv.text(x, base, 11, DIM, 400, "start", &short(&text, 28));
         return;
-    }
-    if let Some(rank) = &p.rank_after {
-        let _ = write!(cv.svg, "<polygon points='{},{} {},{} {},{} {},{}' fill='{}'/>", x + 5, base - 11, x + 10, base - 5, x + 5, base + 1, x, base - 5, tier_color(&rank.tier));
-        x += 16;
-        let text = lang.rank(rank);
-        cv.text(x, base, 11, "#c4cddb", 400, "start", &text);
-        x += text_width(&text, 11) * 7 / 8 + 8;
-    }
-    if let Some(delta) = p.lp_delta {
+    };
+    tier_gem(cv, x, base, &rank.tier);
+    x += 16;
+    let text = lang.rank(rank);
+    cv.text(x, base, 11, if p.tracked { "#c4cddb" } else { DIM }, 400, "start", &text);
+    x += text_width(&text, 11) * 7 / 8 + 8;
+    if let (true, Some(delta)) = (p.tracked, p.lp_delta) {
         let (fill, ink) = if delta > 0 { ("#12382f", GREEN) } else { ("#431f2d", RED) };
         let label = format!("{delta:+} LP");
         let width = text_width(&label, 10) + 10;

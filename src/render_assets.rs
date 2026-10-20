@@ -12,12 +12,11 @@ pub const OBJECTIVES: [&str; 5] = ["dragon", "baron", "herald", "tower", "inhibi
 
 /// Artwork an image needs, keyed by Match-V5 champion names and numeric IDs.
 #[derive(Default)]
-pub struct Wanted { pub champions: BTreeSet<String>, pub splash: Option<String>, pub items: BTreeSet<i64>, pub objectives: bool, pub spells: BTreeSet<i64>, pub runes: BTreeSet<i64> }
+pub struct Wanted { pub champions: BTreeSet<String>, pub items: BTreeSet<i64>, pub objectives: bool, pub spells: BTreeSet<i64>, pub runes: BTreeSet<i64> }
 impl Wanted {
     pub fn from_match(game: &Match) -> Self {
         Self {
             champions: game.participants.iter().map(|p| p.champion.clone()).collect(),
-            splash: None,
             items: game.participants.iter().flat_map(|p| p.items.iter().copied()).filter(|id| *id > 0).collect(),
             objectives: !game.objectives.is_empty(),
             spells: game.participants.iter().flat_map(|p| p.spells.iter().copied()).collect(),
@@ -50,8 +49,6 @@ impl Assets {
             let Some(champ) = champions["data"].as_object().and_then(|m| m.iter().find(|(id, c)| id.eq_ignore_ascii_case(wanted_name) || c["name"].as_str() == Some(wanted_name)).map(|(_, c)| c)) else { continue; };
             if let Some(name) = champ["name"].as_str() { names.insert(wanted_name.clone(), name.to_owned()); }
             if let Some(file) = champ["image"]["full"].as_str() { jobs.insert(format!("champion:{wanted_name}"), format!("/cdn/{version}/img/champion/{file}")); }
-            if wanted.splash.as_deref() == Some(wanted_name.as_str())
-                && let Some(id) = champ["id"].as_str() { jobs.insert("splash".into(), format!("/cdn/img/champion/splash/{id}_0.jpg")); }
         }
         for id in &wanted.items { jobs.insert(format!("item:{id}"), format!("/cdn/{version}/img/item/{id}.png")); }
         if !wanted.spells.is_empty() {

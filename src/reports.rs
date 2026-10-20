@@ -50,7 +50,6 @@ pub struct Report {
     pub matches: i64,
     /// Ordered for display: highest known LP change first, then most games.
     pub players: Vec<PlayerLine>,
-    pub pairs: Vec<Pair>,
     /// Some LP change starts at the first snapshot inside the window rather than before it.
     pub partial_lp: bool,
 }
@@ -65,8 +64,6 @@ pub struct PlayerLine {
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct RankLine { pub queue: u16, pub games: i64, pub wins: i64, pub delta: Option<i64>, pub rank: Option<Rank> }
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Pair { pub a: String, pub b: String, pub games: i64, pub wins: i64 }
 pub struct Award { pub title: Msg, pub player: usize, pub value: String, pub negative: bool }
 
 impl PlayerLine {
@@ -151,13 +148,6 @@ impl Report {
                 lang.f(Msg::VisionPerMin, &[&format!("{:.2}", p.vision_per_min())]),
                 if p.games < 20 { format!(" · {}", lang.t(Msg::SmallSample)) } else { String::new() });
         }
-        if !self.pairs.is_empty() {
-            let _ = writeln!(out, "\n{}", lang.t(Msg::PairsSection));
-            for pair in &self.pairs {
-                let _ = writeln!(out, "{} + {} · {} ({:.0}%){}", plain(&pair.a), plain(&pair.b), lang.f(Msg::WinsOfGames, &[&pair.wins, &pair.games]),
-                    pair.wins as f64 / pair.games as f64 * 100.0, if pair.games < 20 { format!(" · {}", lang.t(Msg::SmallSample)) } else { String::new() });
-            }
-        }
         out
     }
 }
@@ -179,7 +169,6 @@ pub fn compute(app: &App, period: Period, start: i64, end: i64, matches: &[Match
     let mut stats: BTreeMap<String, PlayerLine> = BTreeMap::new();
     let mut champions: BTreeMap<String, BTreeMap<String, i64>> = BTreeMap::new();
     let mut records: BTreeMap<(String, u16), (i64, i64)> = BTreeMap::new();
-    let mut pairs: BTreeMap<(String, String), (i64, i64)> = BTreeMap::new();
     let mut games = 0;
     for m in matches.iter().filter(|m| !m.remake && m.ended_at > start && m.ended_at <= end) {
         let tracked: Vec<_> = m.participants.iter().filter(|p| p.tracked && current.contains(p.puuid.as_str())).collect();
@@ -195,12 +184,6 @@ pub fn compute(app: &App, period: Period, start: i64, end: i64, matches: &[Match
             *champions.entry(p.puuid.clone()).or_default().entry(p.champion.clone()).or_default() += 1;
             if matches!(m.queue, 420 | 440) {
                 let row = records.entry((p.puuid.clone(), m.queue)).or_default(); row.0 += 1; row.1 += i64::from(p.win);
-            }
-        }
-        for (i, p) in tracked.iter().enumerate() {
-            for q in tracked.iter().skip(i + 1).filter(|q| q.team == p.team) {
-                let mut ids = [p.puuid.clone(), q.puuid.clone()]; ids.sort();
-                let row = pairs.entry((ids[0].clone(), ids[1].clone())).or_default(); row.0 += 1; row.1 += i64::from(p.win);
             }
         }
     }
@@ -221,15 +204,9 @@ pub fn compute(app: &App, period: Period, start: i64, end: i64, matches: &[Match
         played.truncate(3);
         line.champions = played;
     }
-    let names: BTreeMap<String, String> = stats.iter().map(|(id, p)| (id.clone(), p.name.clone())).collect();
     let mut players: Vec<PlayerLine> = stats.into_values().collect();
     players.sort_by(|a, b| b.lp().unwrap_or(i64::MIN).cmp(&a.lp().unwrap_or(i64::MIN)).then(b.games.cmp(&a.games)).then_with(|| a.name.cmp(&b.name)));
-    let mut pairs: Vec<Pair> = if period == Period::Daily { Vec::new() } else {
-        pairs.into_iter().map(|((a, b), (games, wins))| Pair { a: names[&a].clone(), b: names[&b].clone(), games, wins }).collect()
-    };
-    pairs.sort_by(|a, b| b.games.cmp(&a.games).then(b.wins.cmp(&a.wins)));
-    pairs.truncate(8);
-    Ok(Some(Report { period, start, end, timezone: app.cfg.reports.timezone.clone(), matches: games, players, pairs, partial_lp: partial }))
+    Ok(Some(Report { period, start, end, timezone: app.cfg.reports.timezone.clone(), matches: games, players, partial_lp: partial }))
 }
 
 /// Which reports a local date gets: weekly on Sunday, monthly on the month's last day

@@ -149,7 +149,19 @@ impl Tracker {
             }
             part.rank_after = after;
         }
-        if m.participants.iter().any(|p| p.tracked) { self.app.store.finish(&m)?; info!("Stored a finished tracked match"); }
+        if m.participants.iter().any(|p| p.tracked) {
+            // Everyone else's rank for the scoreboard. A failure (usually the rate limit) only drops the remaining ranks.
+            if matches!(m.queue, 420 | 440) && !m.remake {
+                for part in m.participants.iter_mut().filter(|p| !p.tracked && !p.puuid.is_empty()) {
+                    match self.app.riot.ranks(&part.puuid).await {
+                        Ok(ranks) => part.rank_after = ranks.into_iter().find(|r| r.queue == m.queue),
+                        Err(error) => { warn!(%error, "Rank of another player unavailable"); break; }
+                    }
+                }
+            }
+            self.app.store.finish(&m)?;
+            info!("Stored a finished tracked match");
+        }
         else { self.app.store.discard(&m.id)?; }
         Ok(())
     }
