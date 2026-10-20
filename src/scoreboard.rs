@@ -167,12 +167,15 @@ fn spell_rune(cv: &mut Canvas, p: &Participant, y: u32, art: &Assets) {
     if let Some(id) = p.runes.get(1) { cv.image(art.image(&format!("rune:{id}")), SPELL_X + 29, y + 27, 16, 16, 8); }
 }
 
-/// A small diamond in the colour of the rank's tier.
-pub(crate) fn tier_gem(cv: &mut Canvas, x: u32, base: u32, tier: &str) {
-    let _ = write!(cv.svg, "<polygon points='{},{} {},{} {},{} {},{}' fill='{}'/>", x + 5, base - 11, x + 10, base - 5, x + 5, base + 1, x, base - 5, tier_color(tier));
+/// The tier's emblem as a 20 px icon; a plain diamond in the tier colour when the artwork is unavailable.
+pub(crate) fn rank_icon(cv: &mut Canvas, art: &Assets, x: u32, base: u32, tier: &str) {
+    match art.image(&format!("tier:{tier}")) {
+        Some(data) => { let _ = write!(cv.svg, "<image href='{data}' x='{x}' y='{}' width='22' height='22'/>", base - 15); }
+        None => { let _ = write!(cv.svg, "<polygon points='{},{} {},{} {},{} {},{}' fill='{}'/>", x + 11, base - 13, x + 18, base - 4, x + 11, base + 5, x + 4, base - 4, tier_color(tier)); }
+    }
 }
 
-/// Rank with a tier gem (and the LP change for tracked players); champion and role when the rank is unknown.
+/// Rank with its emblem and a tier-coloured name (and the LP change for tracked players); champion and role when the rank is unknown.
 fn identity(cv: &mut Canvas, p: &Participant, base: u32, art: &Assets, lang: Lang) {
     let mut x = NAME_X;
     let Some(rank) = &p.rank_after else {
@@ -181,11 +184,10 @@ fn identity(cv: &mut Canvas, p: &Participant, base: u32, art: &Assets, lang: Lan
         cv.text(x, base, 11, DIM, 400, "start", &short(&text, 28));
         return;
     };
-    tier_gem(cv, x, base, &rank.tier);
-    x += 16;
-    let text = lang.rank(rank);
-    cv.text(x, base, 11, if p.tracked { "#c4cddb" } else { DIM }, 400, "start", &text);
-    x += text_width(&text, 11) * 7 / 8 + 8;
+    rank_icon(cv, art, x, base, &rank.tier);
+    x += 27;
+    cv.two_tone(x, base, 11, (tier_color(&rank.tier), 700, &lang.rank_name(rank)), ("#9aa6c0", &format!("  ·  {} LP", rank.lp)));
+    x += text_width(&lang.rank(rank), 11) * 7 / 8 + 14;
     if let (true, Some(delta)) = (p.tracked, p.lp_delta) {
         let (fill, ink) = if delta > 0 { ("#12382f", GREEN) } else { ("#431f2d", RED) };
         let label = format!("{delta:+} LP");

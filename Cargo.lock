@@ -1404,6 +1404,7 @@ dependencies = [
  "chrono-tz",
  "clap",
  "dotenvy",
+ "png",
  "reqwest",
  "resvg",
  "rusqlite",

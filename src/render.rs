@@ -23,6 +23,10 @@ impl Canvas {
     pub fn text(&mut self, x: u32, y: u32, size: u32, fill: &str, weight: u16, anchor: &str, text: &str) {
         let _ = write!(self.svg, "<text x='{x}' y='{y}' font-size='{size}' fill='{fill}' font-weight='{weight}' text-anchor='{anchor}'>{}</text>", escape(text));
     }
+    /// One line of text in two colours, for example a rank name followed by its dimmer details.
+    pub fn two_tone(&mut self, x: u32, y: u32, size: u32, first: (&str, u16, &str), second: (&str, &str)) {
+        let _ = write!(self.svg, "<text x='{x}' y='{y}' font-size='{size}'><tspan fill='{}' font-weight='{}'>{}</tspan><tspan fill='{}' font-weight='400'>{}</tspan></text>", first.0, first.1, escape(first.2), second.0, escape(second.1));
+    }
     pub fn image(&mut self, data: Option<&str>, x: u32, y: u32, w: u32, h: u32, radius: u32) {
         let Some(data) = data else { self.rect(x, y, w, h, radius, "#27364b"); return; };
         self.clips += 1;

@@ -10,15 +10,19 @@ use tokio::task::JoinSet;
 /// Objective icon names on Community Dragon, one blue (100) and one red (200) file each.
 pub const OBJECTIVES: [&str; 5] = ["dragon", "baron", "herald", "tower", "inhibitor"];
 
+/// Ranked tiers that have an emblem on Community Dragon.
+const TIERS: [&str; 10] = ["IRON", "BRONZE", "SILVER", "GOLD", "PLATINUM", "EMERALD", "DIAMOND", "MASTER", "GRANDMASTER", "CHALLENGER"];
+
 /// Artwork an image needs, keyed by Match-V5 champion names and numeric IDs.
 #[derive(Default)]
-pub struct Wanted { pub champions: BTreeSet<String>, pub items: BTreeSet<i64>, pub objectives: bool, pub spells: BTreeSet<i64>, pub runes: BTreeSet<i64> }
+pub struct Wanted { pub champions: BTreeSet<String>, pub items: BTreeSet<i64>, pub objectives: bool, pub spells: BTreeSet<i64>, pub runes: BTreeSet<i64>, pub tiers: BTreeSet<String> }
 impl Wanted {
     pub fn from_match(game: &Match) -> Self {
         Self {
             champions: game.participants.iter().map(|p| p.champion.clone()).collect(),
             items: game.participants.iter().flat_map(|p| p.items.iter().copied()).filter(|id| *id > 0).collect(),
             objectives: !game.objectives.is_empty(),
+            tiers: game.participants.iter().filter_map(|p| p.rank_after.as_ref()).map(|r| r.tier.clone()).collect(),
             spells: game.participants.iter().flat_map(|p| p.spells.iter().copied()).collect(),
             runes: game.participants.iter().flat_map(|p| p.runes.iter().copied()).collect(),
         }
@@ -72,6 +76,9 @@ impl Assets {
                 if let Some(icon) = rune_icons.get(id) { jobs.insert(format!("rune:{id}"), format!("/cdn/img/{icon}")); }
             }
         }
+        for tier in &wanted.tiers {
+            if TIERS.contains(&tier.as_str()) { jobs.insert(format!("tier:{tier}"), format!("/rank/emblem-{}.png", tier.to_lowercase())); }
+        }
         if wanted.objectives {
             for kind in OBJECTIVES { for team in [100, 200] { jobs.insert(format!("objective:{kind}-{team}"), format!("/objective/{kind}-{team}.png")); } }
         }
@@ -83,6 +90,8 @@ impl Assets {
             let cache = cache.clone();
             running.spawn(async move {
                 let bytes = cache.bytes(&path, Duration::from_secs(30 * 86400)).await.ok()?;
+                // Rank emblems are small shapes in a large transparent canvas; keep only a trimmed 64 px icon.
+                let bytes = if key.starts_with("tier:") { emblem_icon(&bytes)? } else { bytes };
                 let mime = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") { "image/png" } else if bytes.starts_with(b"\xff\xd8") { "image/jpeg" } else { return None; };
                 Some((key, format!("data:{mime};base64,{}", STANDARD.encode(bytes))))
             });
@@ -102,17 +111,18 @@ impl Cache {
         serde_json::from_slice(&self.bytes(path, Duration::from_secs(86400)).await?).map_err(|_| anyhow::anyhow!("Invalid artwork metadata"))
     }
     async fn bytes(&self, path: &str, age: Duration) -> Result<Vec<u8>> {
-        ensure!(path.len() <= 220 && (path.starts_with("/cdn/") || path.starts_with("/objective/") || path == "/api/versions.json") && !path.split('/').any(|p| p == "..")
+        ensure!(path.len() <= 220 && (path.starts_with("/cdn/") || path.starts_with("/objective/") || path.starts_with("/rank/") || path == "/api/versions.json") && !path.split('/').any(|p| p == "..")
             && path.chars().all(|c| c.is_ascii_alphanumeric() || "/._-".contains(c)), "Invalid artwork path");
         let file = self.directory.join(path.replace('/', "_"));
         if let Ok(meta) = fs::metadata(&file)
             && meta.len() <= 2 * 1024 * 1024 && meta.modified().ok().and_then(|t| t.elapsed().ok()).is_some_and(|a| a < age)
                 && let Ok(bytes) = fs::read(&file) { return Ok(bytes); }
         // Objective icons are the match-history assets of the League client, published by Community Dragon.
-        let url = match path.strip_prefix("/objective/") {
-            Some(name) => format!("https://raw.communitydragon.org/latest/plugins/rcp-fe-lol-match-history/global/default/{name}"),
-            None => format!("https://ddragon.leagueoflegends.com{path}"),
-        };
+        let url = if let Some(name) = path.strip_prefix("/objective/") {
+            format!("https://raw.communitydragon.org/latest/plugins/rcp-fe-lol-match-history/global/default/{name}")
+        } else if let Some(name) = path.strip_prefix("/rank/") {
+            format!("https://raw.communitydragon.org/latest/plugins/rcp-fe-lol-static-assets/global/default/images/ranked-emblem/{name}")
+        } else { format!("https://ddragon.leagueoflegends.com{path}") };
         let response = self.http.get(url).send().await.map_err(|_| anyhow::anyhow!("Artwork network request failed"))?;
         ensure!(response.status().is_success(), "Artwork temporarily unavailable");
         let bytes = bounded_body(response, 2 * 1024 * 1024).await?;
@@ -136,4 +146,45 @@ fn prune(directory: &Path) {
         if total <= 64 * 1024 * 1024 { break; }
         if fs::remove_file(file).is_ok() { total -= size; }
     }
+}
+
+/// Crops a transparent PNG to its visible pixels and averages it down to fit a centred 64 x 64 icon.
+fn emblem_icon(bytes: &[u8]) -> Option<Vec<u8>> {
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+    decoder.set_transformations(png::Transformations::EXPAND);
+    let mut reader = decoder.read_info().ok()?;
+    let mut buffer = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buffer).ok()?;
+    if info.color_type != png::ColorType::Rgba || info.bit_depth != png::BitDepth::Eight { return None; }
+    let (w, h) = (info.width as usize, info.height as usize);
+    let alpha = |x: usize, y: usize| buffer[(y * w + x) * 4 + 3];
+    let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0, 0);
+    for y in 0..h { for x in 0..w { if alpha(x, y) > 8 { x0 = x0.min(x); y0 = y0.min(y); x1 = x1.max(x + 1); y1 = y1.max(y + 1); } } }
+    if x1 <= x0 || y1 <= y0 { return None; }
+    const SIZE: usize = 64;
+    let scale = (SIZE as f64 / (x1 - x0) as f64).min(SIZE as f64 / (y1 - y0) as f64);
+    let (ow, oh) = (((x1 - x0) as f64 * scale).round().max(1.0) as usize, ((y1 - y0) as f64 * scale).round().max(1.0) as usize);
+    let (left, top) = ((SIZE - ow) / 2, (SIZE - oh) / 2);
+    let mut out = vec![0u8; SIZE * SIZE * 4];
+    for oy in 0..oh {
+        for ox in 0..ow {
+            // Box average of the source pixels behind this output pixel, weighted by alpha.
+            let (sx0, sx1) = (x0 + (ox as f64 / scale) as usize, (x0 + ((ox + 1) as f64 / scale).ceil() as usize).min(x1));
+            let (sy0, sy1) = (y0 + (oy as f64 / scale) as usize, (y0 + ((oy + 1) as f64 / scale).ceil() as usize).min(y1));
+            let (mut r, mut g, mut b, mut a, mut n) = (0f64, 0f64, 0f64, 0f64, 0f64);
+            for sy in sy0..sy1.max(sy0 + 1) { for sx in sx0..sx1.max(sx0 + 1) {
+                let i = (sy.min(h - 1) * w + sx.min(w - 1)) * 4;
+                let al = f64::from(buffer[i + 3]);
+                r += f64::from(buffer[i]) * al; g += f64::from(buffer[i + 1]) * al; b += f64::from(buffer[i + 2]) * al; a += al; n += 1.0;
+            } }
+            let o = ((top + oy) * SIZE + left + ox) * 4;
+            if a > 0.0 { out[o] = (r / a) as u8; out[o + 1] = (g / a) as u8; out[o + 2] = (b / a) as u8; out[o + 3] = (a / n) as u8; }
+        }
+    }
+    let mut encoded = Vec::new();
+    let mut encoder = png::Encoder::new(&mut encoded, SIZE as u32, SIZE as u32);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.write_header().ok()?.write_image_data(&out).ok()?;
+    Some(encoded)
 }

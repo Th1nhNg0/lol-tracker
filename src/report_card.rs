@@ -1,7 +1,7 @@
 //! Daily/weekly/monthly report card in the scoreboard's style: a header, honours, then a tinted block
 //! of players who climbed and one of players who dropped.
-use crate::{App, i18n::{Lang, Msg}, render::{Canvas, DIM, GOLD, GREEN, RED, TEXT, blocking, number, rasterize, short, text_width}, render_assets::{Assets, Wanted},
-    reports::{PlayerLine, Report}, scoreboard::{Block, DEFEAT, VICTORY, tier_gem}};
+use crate::{App, i18n::{Lang, Msg}, render::{Canvas, DIM, GOLD, GREEN, RED, TEXT, blocking, number, rasterize, short, text_width, tier_color}, render_assets::{Assets, Wanted},
+    reports::{PlayerLine, Report}, scoreboard::{Block, DEFEAT, VICTORY, rank_icon}};
 use anyhow::{Result, ensure};
 use std::path::Path;
 
@@ -27,7 +27,8 @@ fn top_champion(p: &PlayerLine) -> Option<&str> { p.champions.first().map(|(c, _
 fn portrait<'a>(art: &'a Assets, p: &PlayerLine) -> Option<&'a str> { top_champion(p).and_then(|c| art.image(&format!("champion:{c}"))) }
 
 pub async fn png(app: &App, report: Report, lang: Lang) -> Result<Vec<u8>> {
-    let wanted = Wanted { champions: report.players.iter().filter_map(top_champion).map(str::to_owned).collect(), ..Default::default() };
+    let tiers = report.players.iter().flat_map(|p| p.ranks.iter()).filter_map(|r| r.rank.as_ref()).map(|r| r.tier.clone()).collect();
+    let wanted = Wanted { champions: report.players.iter().filter_map(top_champion).map(str::to_owned).collect(), tiers, ..Default::default() };
     let art = Assets::load(wanted, app.cfg.database.parent().unwrap_or(Path::new(".")).join("artwork")).await;
     blocking(move || card(&report, lang, &art)).await
 }
@@ -83,9 +84,8 @@ pub fn card(report: &Report, lang: Lang, art: &Assets) -> Result<Vec<u8>> {
             cv.outline(14, ry + 6, 46, 46, 2, "#2a374d");
             cv.text(NAME_X, ry + 24, 14, TEXT, 700, "start", &short(&p.name, 22));
             if let Some(line) = p.ranks.iter().filter(|r| r.rank.is_some()).max_by_key(|r| r.games) && let Some(rank) = &line.rank {
-                tier_gem(&mut cv, NAME_X, ry + 44, &rank.tier);
-                let text = format!("{}  ·  {}", lang.rank(rank), lang.queue(line.queue));
-                cv.text(NAME_X + 16, ry + 44, 11, DIM, 400, "start", &text);
+                rank_icon(&mut cv, art, NAME_X, ry + 44, &rank.tier);
+                cv.two_tone(NAME_X + 27, ry + 44, 11, (tier_color(&rank.tier), 700, &lang.rank_name(rank)), ("#9aa6c0", &format!("  ·  {} LP  ·  {}", rank.lp, lang.queue(line.queue))));
             }
             cv.text(RECORD_X, ry + 24, 14, TEXT, 700, "middle", &format!("{} – {}", p.wins, p.games - p.wins));
             cv.text(RECORD_X, ry + 43, 12, if p.wins * 2 >= p.games { GREEN } else { RED }, 700, "middle", &format!("{:.0}%", p.win_rate()));
