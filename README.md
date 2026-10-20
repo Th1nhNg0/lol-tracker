@@ -56,7 +56,7 @@ The scoreboard is posted first, then the commentary is edited into the message t
 > 🛡️ **Mochi** — *Held the Line*: 9/6/15 while soaking 46k damage, and the loudest voice in the lobby.
 > 👀 **Rook** — *Ward Hoarder*: 114 vision score and 2 kills. The map has never been so well lit or the scoreboard so quiet.
 >
-> **Key player:** Juniper — 45k damage, the top of his team, in a loss that was decided by six kills.
+> **Key player:** Juniper — 45k damage, the most on the team, in a loss that was decided by six kills.
 
 *(Illustrative text. The tone is entirely controlled by your `prompt.md`.)*
 
