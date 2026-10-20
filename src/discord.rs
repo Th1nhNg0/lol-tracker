@@ -135,7 +135,15 @@ impl Handler {
                 let Some(game) = self.app.store.get_match(None)? else { return Ok(Reply::text(lang.t(Msg::NoGames))); };
                 let mut reply = Reply::file("scoreboard.txt", view::scoreboard(&game, lang));
                 if let Some(image) = scoreboard_image(&self.app, &game).await { reply.file = Some(("scoreboard.png".into(), image)); }
-                reply.text = self.app.store.setting(&format!("commentary/{}", game.id))?.unwrap_or_else(|| view::commentary(&game, lang));
+                reply.text = match self.app.store.setting(&format!("commentary/{}", game.id))? {
+                    Some(text) => text,
+                    // Imported or never-commented games get their AI commentary on first request.
+                    None if self.app.llm.is_some() && !game.remake => match ai_text(&self.app, &game).await {
+                        Ok(text) => { self.app.store.commentary_done(&game.id, Some(&text))?; text }
+                        Err(error) => { warn!(%error, "Optional LLM commentary unavailable"); view::commentary(&game, lang) }
+                    },
+                    None => view::commentary(&game, lang),
+                };
                 reply.game = Some(game);
                 Ok(reply)
             }
@@ -414,15 +422,20 @@ async fn deliver(app: &App, http: &Http, delivery: &crate::store::Delivery) -> R
     Ok(())
 }
 
+/// Factual summary plus AI lines when both fit in one message; the AI text only enhances it.
+async fn ai_text(app: &App, game: &Match) -> Result<String> {
+    let llm = app.llm.as_ref().ok_or_else(|| anyhow::anyhow!("LLM is not enabled"))?;
+    let recent = app.store.recent_commentary(&game.id, 6)?;
+    let ai = llm.enhance(game, app.cfg.language, &recent).await?;
+    let combined = format!("{}\n\n{ai}", view::commentary(game, app.cfg.language));
+    Ok(if combined.encode_utf16().count() <= 2000 { combined } else { view::limit(&ai, 2000) })
+}
+
 pub async fn commentary_worker(app: Arc<App>, http: Arc<Http>) -> Result<()> {
-    let Some(llm) = &app.llm else { std::future::pending::<()>().await; return Ok(()); };
+    if app.llm.is_none() { std::future::pending::<()>().await; return Ok(()); }
     loop {
         if let Some(game) = app.store.next_commentary()? {
-            let text = llm.enhance(&game, app.cfg.language).await.map(|ai| {
-                // Keep the factual summary when both fit in one message; AI text only enhances it.
-                let combined = format!("{}\n\n{ai}", view::commentary(&game, app.cfg.language));
-                if combined.encode_utf16().count() <= 2000 { combined } else { view::limit(&ai, 2000) }
-            });
+            let text = ai_text(&app, &game).await;
             if let Err(error) = &text { warn!(%error, "Optional LLM commentary unavailable"); }
             if let Ok(text) = text {
                 if let Some((channel, message)) = app.store.message(&game.id)? {

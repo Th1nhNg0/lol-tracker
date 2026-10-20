@@ -51,6 +51,10 @@ pub struct Llm {
     pub model: String,
     pub base_url: String,
     pub timeout_secs: u64,
+    /// Optional Markdown file with the commentary persona and style; the built-in style is used when unset.
+    pub prompt_file: Option<PathBuf>,
+    /// Send tracked players' display names so the prompt can refer to them (e.g. inside jokes).
+    pub send_names: bool,
 }
 // Deliberately no Debug/Serialize: never render credentials through logging.
 pub struct Secrets {
@@ -73,7 +77,7 @@ impl Default for Reports {
     fn default() -> Self { Self { enabled: true, monthly: true, timezone: "Asia/Ho_Chi_Minh".into(), hour: 23, minute: 59 } }
 }
 impl Default for Llm {
-    fn default() -> Self { Self { enabled: false, provider: "openrouter".into(), model: String::new(), base_url: "https://openrouter.ai/api/v1".into(), timeout_secs: 15 } }
+    fn default() -> Self { Self { enabled: false, provider: "openrouter".into(), model: String::new(), base_url: "https://openrouter.ai/api/v1".into(), timeout_secs: 15, prompt_file: None, send_names: false } }
 }
 impl Config {
     pub fn load(path: &Path, env_path: Option<&Path>) -> Result<(Self, Secrets)> {
@@ -92,6 +96,7 @@ impl Config {
         let parent = path.parent().unwrap_or(Path::new("."));
         if cfg.database.is_relative() { cfg.database = parent.join(&cfg.database); }
         if cfg.players_file.is_relative() { cfg.players_file = parent.join(&cfg.players_file); }
+        if let Some(file) = cfg.llm.prompt_file.as_mut().filter(|f| f.is_relative()) { *file = parent.join(&*file); }
         let mut values = HashMap::new();
         if let Some(path) = env_path {
             for item in dotenvy::from_path_iter(path).map_err(|_| anyhow::anyhow!("Cannot read dotenv file"))? {

@@ -226,6 +226,14 @@ impl Store {
         tx.execute("UPDATE matches SET commented=1 WHERE id=?", [id])?;
         tx.commit()?; Ok(())
     }
+    /// AI lines of the newest commented games (excluding `skip`), so the model can avoid repeating itself.
+    pub fn recent_commentary(&self, skip: &str, limit: usize) -> Result<Vec<String>> {
+        let db = self.db()?;
+        let mut q = db.prepare("SELECT s.value FROM settings s JOIN matches m ON s.key='commentary/' || m.id WHERE m.id<>? ORDER BY m.ended_at DESC LIMIT ?")?;
+        let rows = q.query_map(params![skip, limit as i64], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        // Stored text is "factual summary\n\nAI lines" when both fit, otherwise only the AI lines.
+        Ok(rows.into_iter().map(|t| t.rsplit("\n\n").next().unwrap_or(&t).to_owned()).collect())
+    }
     pub fn prune(&self, days: u32) -> Result<()> {
         let cutoff = now() - i64::from(days) * 86400;
         let mut db = self.db()?; let tx = db.transaction()?;

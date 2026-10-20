@@ -36,3 +36,5 @@ provider = "openrouter" # Descriptive label only; every provider uses the same O
 model = ""              # e.g. a model ID available to your OpenRouter/OpenAI account, or a local model name
 base_url = "https://openrouter.ai/api/v1" # API root; "/chat/completions" is appended. http:// only for localhost.
 timeout_secs = 15
+# prompt_file = "prompt.md" # Optional persona/style (see prompt.example.md); a built-in style is used when unset.
+# send_names = false        # true sends tracked players' display names so the prompt can use inside jokes.

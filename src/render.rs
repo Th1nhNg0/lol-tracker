@@ -273,7 +273,6 @@ fn pill(cv: &mut Canvas, x: u32, y: u32, height: u32, fill: &str, color: &str, s
 fn badge_style(badge: Badge, lang: Lang) -> (&'static str, &'static str, &'static str) {
     match badge {
         Badge::Mvp => (lang.t(Msg::ImgMvp), GOLD, "#3d3418"),
-        Badge::Ace => (lang.t(Msg::ImgAce), "#c4cee4", "#2a3242"),
         Badge::Worst => (lang.t(Msg::ImgWorst), RED, "#3d1d26"),
     }
 }

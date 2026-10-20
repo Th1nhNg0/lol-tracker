@@ -4,6 +4,7 @@
 !.env.example
 /config.toml
 /players.json
+/prompt.md
 /private/
 /legacy/
 /data/

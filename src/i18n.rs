@@ -169,7 +169,6 @@ catalog! {
     ReasonDeaths: "chết {} lần", "{} deaths";
     ReasonSteady: "ổn định, không có chỉ số vượt trội", "steady, no single standout stat";
     ReasonLowest: "đóng góp tổng thể thấp nhất đội", "lowest overall contribution on the team";
-    AiHeader: "Bình luận AI (có thể sai):", "AI commentary (may be inaccurate):";
 
     // Timeline events
     EventKill: "{} hạ {}", "{} killed {}";
@@ -302,7 +301,6 @@ catalog! {
     ImgTower: "TRỤ", "TOWER";
     ImgInhibitor: "NHÀ LÍNH", "INHIB";
     ImgMvp: "MVP", "MVP";
-    ImgAce: "ACE", "ACE";
     ImgWorst: "CHƠI TỆ", "WORST";
     ImgDamage: "SÁT THƯƠNG", "DAMAGE";
     ImgTaken: "NHẬN VÀO", "TAKEN";
