@@ -79,7 +79,6 @@ pub fn card(report: &Report, lang: Lang, art: &Assets) -> Result<Vec<u8>> {
     }
     let height = y + 44;
     cv.rect(32, y + 4, WIDTH - 64, 1, 0, "#273144");
-    cv.text(32, y + 28, 12, FAINT, 400, "start", lang.t(Msg::ImgFooter));
     cv.text(WIDTH - 32, y + 28, 12, GOLD, 700, "end", "LOL TRACKER");
     let svg = format!("<svg xmlns='http://www.w3.org/2000/svg' width='{WIDTH}' height='{height}'>{HERO_DEFS}<g font-family='Be Vietnam Pro,DejaVu Sans,sans-serif'><rect width='{WIDTH}' height='{height}' fill='#0b1220'/>{}</g></svg>", cv.svg);
     ensure!(height <= 8000, "Report exceeds image bounds");

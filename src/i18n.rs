@@ -311,7 +311,6 @@ catalog! {
     ImgItems: "TRANG BỊ", "ITEMS";
     ImgTeamTotals: "{} hạ gục  ·  {} vàng  ·  {} sát thương", "{} K  /  {} G  /  {} DMG";
     ImgWards: "{} mắt · {} mắt tím", "{}w · {}c";
-    ImgFooter: "Dự án của người hâm mộ, không chính thức · Hình ảnh © Riot Games", "Unofficial fan project · Artwork © Riot Games";
     ImgDateFormat: "%d/%m/%Y  ·  %H:%M %Z", "%d %b %Y  ·  %H:%M %Z";
     ChartDamageTitle: "Sát thương lên tướng", "Damage to champions";
     ChartPhysical: "Vật lý", "Physical";

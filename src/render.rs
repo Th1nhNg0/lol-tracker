@@ -128,7 +128,6 @@ pub fn scoreboard(game: &Match, lang: Lang, timezone: &str, preview: bool, art: 
         top += 106 + ROW * players.len() as u32;
     }
     cv.text(48, height - 19, 12, FAINT, 400, "start", &format!("{}  ·  Data Dragon {}", game.id, art.version));
-    cv.text(1552, height - 19, 12, FAINT, 400, "end", lang.t(Msg::ImgFooter));
     cv.svg.push_str("</g></svg>");
     rasterize(&cv.svg, WIDTH, height)
 }
