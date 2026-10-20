@@ -58,7 +58,7 @@ pub fn scoreboard(game: &Match, lang: Lang, timezone: &str, preview: bool, art: 
     for player in &game.participants { grouped.entry(player.team).or_default().push(player); }
     let mut teams: Vec<_> = grouped.into_iter().collect();
     teams.sort_by_key(|(id, players)| (!players.iter().any(|p| p.tracked), *id));
-    let height = 350 + teams.iter().map(|(_, rows)| 106 + ROW * rows.len() as u32).sum::<u32>() + 48;
+    let height = 294 + teams.iter().map(|(_, rows)| 106 + ROW * rows.len() as u32).sum::<u32>() + 48;
     ensure!(height <= 5000, "Scoreboard exceeds image bounds");
     let mut cv = Canvas { clips: 0, svg: format!("<svg xmlns='http://www.w3.org/2000/svg' width='{WIDTH}' height='{height}'>") };
     cv.svg.push_str(HERO_DEFS);
@@ -67,30 +67,23 @@ pub fn scoreboard(game: &Match, lang: Lang, timezone: &str, preview: bool, art: 
     cv.rect(0, 0, WIDTH, height, 0, "url(#page)");
     let badges = presentation::badges(game);
     if let Some(splash) = art.image("splash") {
-        let _ = write!(cv.svg, "<defs><clipPath id='hero'><rect width='{WIDTH}' height='324'/></clipPath></defs><image href='{splash}' width='{WIDTH}' height='324' preserveAspectRatio='xMidYMin slice' clip-path='url(#hero)'/>");
-    } else { cv.rect(0, 0, WIDTH, 324, 0, "#182334"); }
-    cv.rect(0, 0, WIDTH, 324, 0, "url(#heroShade)");
-    cv.rect(0, 200, WIDTH, 124, 0, "url(#fade)");
+        let _ = write!(cv.svg, "<defs><clipPath id='hero'><rect width='{WIDTH}' height='268'/></clipPath></defs><image href='{splash}' width='{WIDTH}' height='268' preserveAspectRatio='xMidYMin slice' clip-path='url(#hero)'/>");
+    } else { cv.rect(0, 0, WIDTH, 268, 0, "#182334"); }
+    cv.rect(0, 0, WIDTH, 268, 0, "url(#heroShade)");
+    cv.rect(0, 144, WIDTH, 124, 0, "url(#fade)");
     let tracked: Vec<_> = game.participants.iter().filter(|p| p.tracked).collect();
     let split = tracked.iter().any(|p| tracked.first().is_some_and(|f| f.team != p.team));
     let focus_team = teams.first().map(|(id, _)| *id).unwrap_or(100);
     let won = teams.first().is_some_and(|(_, rows)| rows.first().is_some_and(|p| p.win));
     let result = lang.t(if game.remake { Msg::ImgRemake } else if split { Msg::ImgResult } else if won { Msg::ImgVictory } else { Msg::ImgDefeat });
     let accent = if game.remake || split { DIM } else if won { GREEN } else { RED };
-    cv.rect(0, 32, 5, 225, 0, accent);
+    cv.rect(0, 32, 5, 165, 0, accent);
     cv.text(54, 44, 13, GOLD, 700, "start", lang.t(Msg::ImgHeader));
     cv.text(50, 119, 60, accent, 700, "start", result);
     cv.text(54, 159, 22, TEXT, 700, "start", &format!("{}  ·  {}:{:02}", lang.queue(game.queue), game.duration / 60, game.duration % 60));
     let tz = timezone.parse::<chrono_tz::Tz>().map_err(|_| anyhow::anyhow!("Invalid image timezone"))?;
     let ended = chrono::DateTime::from_timestamp(game.ended_at, 0).ok_or_else(|| anyhow::anyhow!("Invalid image timestamp"))?.with_timezone(&tz);
     cv.text(54, 187, 15, DIM, 400, "start", &ended.format(lang.t(Msg::ImgDateFormat)).to_string());
-    for (i, p) in tracked.iter().take(10).enumerate() {
-        let x = 54 + i as u32 * 43;
-        cv.image(art.image(&format!("champion:{}", p.champion)), x, 207, 47, 47, 23);
-        cv.outline(x, 207, 47, 47, 23, color(p.team));
-    }
-    let group_x = 54 + tracked.len().min(10) as u32 * 43 + 21;
-    cv.text(group_x, 235, 16, TEXT, 700, "start", &lang.f(Msg::ImgTrackedPlayers, &[&tracked.len()]));
     if preview { cv.text(1542, 29, 11, DIM, 400, "end", lang.t(Msg::ImgPreview)); }
     if teams.len() >= 2 {
         cv.rect(1142, 52, 402, 139, 20, "rgba(8,14,25,.84)");
@@ -101,27 +94,16 @@ pub fn scoreboard(game: &Match, lang: Lang, timezone: &str, preview: bool, art: 
             cv.text(x, 156, 63, color(*id), 700, "middle", &players.iter().map(|p| p.kills).sum::<i64>().to_string());
         }
         cv.text(1344, 128, 14, FAINT, 700, "middle", "VS");
-        // The tracked team's MVP/ACE (same deterministic score as the text verdict).
-        let star = game.participants.iter().find_map(|p| badges.iter().find(|(id, b)| *id == p.id && p.team == focus_team && *b != Badge::Worst).map(|(_, b)| (p, *b)));
-        if let Some((star, badge)) = star {
-            let (label, ink, _) = badge_style(badge, lang);
-            cv.rect(1142, 203, 402, 62, 16, "rgba(8,14,25,.84)");
-            cv.outline(1142, 203, 402, 62, 16, "#4a4f5c");
-            cv.image(art.image(&format!("champion:{}", star.champion)), 1156, 211, 46, 46, 12);
-            cv.outline(1156, 211, 46, 46, 12, ink);
-            cv.text(1216, 229, 11, ink, 700, "start", label);
-            cv.text(1216, 252, 17, TEXT, 700, "start", &format!("{}  ·  {}/{}/{}", short(&star.name, 20), star.kills, star.deaths, star.assists));
-        }
         let a: i64 = teams[0].1.iter().map(|p| p.gold).sum();
         let b: i64 = teams[1].1.iter().map(|p| p.gold).sum();
         let share = (a as f64 / (a + b).max(1) as f64 * 1492.0).clamp(0.0, 1492.0) as u32;
-        cv.rect(54, 281, 1492, 8, 4, color(teams[1].0));
-        cv.rect(54, 281, share, 8, 4, color(focus_team));
-        cv.text(54, 312, 16, color(teams[0].0), 700, "start", &compact(a));
-        cv.text(1546, 312, 16, color(teams[1].0), 700, "end", &compact(b));
-        cv.text(800, 312, 13, if a >= b { color(teams[0].0) } else { color(teams[1].0) }, 700, "middle", &format!("{}  ·  +{}", lang.t(Msg::ImgGoldDifference), compact((a - b).abs())));
+        cv.rect(54, 225, 1492, 8, 4, color(teams[1].0));
+        cv.rect(54, 225, share, 8, 4, color(focus_team));
+        cv.text(54, 256, 16, color(teams[0].0), 700, "start", &compact(a));
+        cv.text(1546, 256, 16, color(teams[1].0), 700, "end", &compact(b));
+        cv.text(800, 256, 13, if a >= b { color(teams[0].0) } else { color(teams[1].0) }, 700, "middle", &format!("{}  ·  +{}", lang.t(Msg::ImgGoldDifference), compact((a - b).abs())));
     }
-    let mut top = 350;
+    let mut top = 294;
     for (team, mut players) in teams {
         players.sort_by_key(|p| p.id);
         draw_team(&mut cv, game, team, &players, top, lang, art, &badges);
@@ -187,7 +169,6 @@ fn draw_team(cv: &mut Canvas, game: &Match, team: u16, players: &[&Participant],
     let won = players.first().is_some_and(|p| p.win);
     let total_kills: i64 = players.iter().map(|p| p.kills).sum();
     let total_damage: i64 = players.iter().map(|p| p.damage).sum();
-    let total_gold: i64 = players.iter().map(|p| p.gold).sum();
     // Open header: team, result and objectives as chips, totals on the right, a fading team rule.
     let name = team_name(team, lang);
     cv.text(40, top + 34, 26, tint, 700, "start", &name);
@@ -200,7 +181,6 @@ fn draw_team(cv: &mut Canvas, game: &Match, team: u16, players: &[&Participant],
             x += pill(cv, x, top + 12, 28, "#172235", if *count > 0 { TEXT } else { FAINT }, 12, &format!("{}  {count}", lang.t(label))) + 10;
         }
     }
-    cv.text(1560, top + 33, 16, DIM, 700, "end", &lang.f(Msg::ImgTeamTotals, &[&total_kills, &compact(total_gold), &compact(total_damage)]));
     let _ = write!(cv.svg, "<rect x='40' y='{}' width='1520' height='2' fill='url(#rule{style})'/>", top + 50);
     for (x, label) in [(512, "KDA"), (632, "CS"), (756, lang.t(Msg::ImgDamage)), (900, lang.t(Msg::ImgTaken)), (1030, lang.t(Msg::ImgGold)), (1138, lang.t(Msg::ImgVision)), (1350, lang.t(Msg::ImgItems))] {
         cv.text(x, top + 76, 11, FAINT, 700, "middle", label);
@@ -242,7 +222,8 @@ fn draw_team(cv: &mut Canvas, game: &Match, team: u16, players: &[&Participant],
         cv.text(x, y + 55, 12, DIM, 400, "start", &secondary);
         if let (true, Some(delta)) = (p.tracked, p.lp_delta) {
             let (fill, ink) = if delta > 0 { ("#183f37", GREEN) } else if delta < 0 { ("#4a2534", RED) } else { ("#263343", DIM) };
-            pill(cv, x + text_width(&secondary, 12) + 8, y + 41, 19, fill, ink, 10, &format!("{delta:+} LP"));
+            // text_width over-estimates 12px body text by about an eighth; the chip would otherwise reach the KDA column.
+            pill(cv, x + text_width(&secondary, 12) * 7 / 8 + 8, y + 41, 19, fill, ink, 10, &format!("{delta:+} LP"));
         }
         for (x, value, c) in [(467, p.kills, TEXT), (512, p.deaths, RED), (557, p.assists, BLUE)] { cv.text(x, y + 30, 20, c, 700, "middle", &value.to_string()); }
         cv.text(490, y + 30, 17, FAINT, 400, "middle", "/");
@@ -256,14 +237,12 @@ fn draw_team(cv: &mut Canvas, game: &Match, team: u16, players: &[&Participant],
         cv.text(632, y + 30, 20, if p.cs == best_cs { GOLD } else { TEXT }, 700, "middle", &p.cs.to_string());
         cv.text(632, y + 56, 11, FAINT, 400, "middle", &format!("{:.1}/m", p.cs as f64 / minutes));
         cv.text(756, y + 30, 20, if p.damage == best_damage { GOLD } else { TEXT }, 700, "middle", &number(p.damage));
-        cv.text(756, y + 52, 11, FAINT, 400, "middle", &format!("{:.0}% · {:.0}/m", p.damage as f64 / total_damage.max(1) as f64 * 100.0, p.damage as f64 / minutes));
+        cv.text(756, y + 52, 11, FAINT, 400, "middle", &format!("{:.0}%", p.damage as f64 / total_damage.max(1) as f64 * 100.0));
         cv.rect(704, y + 60, 104, 4, 2, "#2a3549");
         cv.rect(704, y + 60, (p.damage as f64 / best_damage.max(1) as f64 * 104.0).clamp(2.0, 104.0) as u32, 4, 2, if p.damage == best_damage { GOLD } else { tint });
         let taken = if p.damage_taken > 0 { number(p.damage_taken) } else { "—".into() };
-        cv.text(900, y + 30, 19, "#d5dbe6", 400, "middle", &taken);
-        cv.text(900, y + 56, 11, FAINT, 400, "middle", &format!("{:.0}/m", p.damage_taken as f64 / minutes));
-        cv.text(1030, y + 30, 20, if p.gold == best_gold { GOLD } else { TEXT }, 700, "middle", &compact(p.gold));
-        cv.text(1030, y + 56, 11, FAINT, 400, "middle", &format!("{:.0}/m", p.gold as f64 / minutes));
+        cv.text(900, y + 43, 19, "#d5dbe6", 400, "middle", &taken);
+        cv.text(1030, y + 43, 20, if p.gold == best_gold { GOLD } else { TEXT }, 700, "middle", &compact(p.gold));
         cv.text(1138, y + 30, 19, "#d5dbe6", 400, "middle", &p.vision.to_string());
         cv.text(1138, y + 56, 11, FAINT, 400, "middle", &lang.f(Msg::ImgWards, &[&p.wards, &p.control_wards]));
         for (slot, item) in p.items.iter().take(7).enumerate() {

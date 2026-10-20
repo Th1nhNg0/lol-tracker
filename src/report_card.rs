@@ -4,10 +4,9 @@ use crate::{App, i18n::{Lang, Msg}, render::{BLUE, Canvas, DIM, FAINT, GOLD, GRE
 use anyhow::{Result, ensure};
 use std::path::Path;
 
-const HERO: u32 = 316;
+const HERO: u32 = 232;
 const ROW: u32 = 80;
 const QUEUES: [u16; 2] = [420, 440];
-const QUEUE_X: [u32; 2] = [1184, 1432];
 const AWARD_COLORS: [&str; 6] = [GOLD, RED, "#ff9e46", GREEN, "#50d7e6", BLUE];
 
 fn tier_color(tier: &str) -> &'static str {
@@ -93,31 +92,15 @@ fn hero(cv: &mut Canvas, report: &Report, lang: Lang, art: &Assets) -> u32 {
     cv.rect(0, HERO - 140, WIDTH, 124, 0, "url(#fade)");
     let net = report.net_lp();
     let accent = net.map_or(BLUE, |n| if n >= 0 { GREEN } else { RED });
-    cv.rect(0, 32, 5, 225, 0, accent);
+    cv.rect(0, 32, 5, 160, 0, accent);
     cv.text(54, 44, 13, GOLD, 700, "start", lang.t(Msg::ReportBadge));
     cv.text(50, 112, 52, accent, 700, "start", &short(&report.title(lang).to_uppercase(), 34));
     cv.text(54, 152, 22, TEXT, 700, "start", &report.range(lang));
-    let appearances: i64 = report.players.iter().map(|p| p.games).sum();
-    cv.text(54, 184, 16, DIM, 400, "start", &format!("{}  ·  {}", lang.f(Msg::MatchesCount, &[&report.matches]), lang.f(Msg::PlayerGames, &[&appearances])));
-    let shown: Vec<_> = report.players.iter().take(10).collect();
-    for (i, p) in shown.iter().enumerate() {
-        let x = 54 + i as u32 * 43;
-        cv.image(portrait(art, p), x, 207, 47, 47, 23);
-        cv.outline(x, 207, 47, 47, 23, "#0b1220");
-    }
-    cv.text(54 + shown.len() as u32 * 43 + 21, 236, 16, TEXT, 700, "start", &lang.f(Msg::PlayersCount, &[&report.players.len()]));
+    cv.text(54, 184, 16, DIM, 400, "start", &lang.f(Msg::MatchesCount, &[&report.matches]));
     cv.rect(1142, 52, 402, 139, 20, "rgba(8,14,25,.84)");
     cv.outline(1142, 52, 402, 139, 20, "#39465a");
     cv.text(1343, 84, 13, DIM, 700, "middle", lang.t(Msg::GroupLp));
     cv.text(1343, 158, 58, accent, 700, "middle", &net.map_or_else(|| "—".to_owned(), |n| format!("{n:+} LP")));
-    let (gained, lost) = report.gained_lost();
-    if gained + lost > 0 {
-        let share = (gained as f64 / (gained + lost) as f64 * 1492.0).round() as u32;
-        cv.rect(54, 268, 1492, 8, 4, RED);
-        cv.rect(54, 268, share, 8, 4, GREEN);
-        cv.text(54, 296, 13, GREEN, 700, "start", &lang.f(Msg::LpGained, &[&gained]));
-        cv.text(1546, 296, 13, RED, 700, "end", &lang.f(Msg::LpLost, &[&lost]));
-    }
     HERO + 14
 }
 
@@ -136,7 +119,10 @@ fn table(cv: &mut Canvas, y: u32, report: &Report, lang: Lang, art: &Assets) -> 
         cv.text(x, y + 6, 11, FAINT, 700, "middle", label);
     }
     cv.text(120, y + 6, 11, FAINT, 700, "start", lang.t(Msg::ColPlayer));
-    for (queue, x) in QUEUES.iter().zip(QUEUE_X) { cv.text(x, y + 6, 13, GREEN, 700, "middle", &lang.queue(*queue)); }
+    // Only queues somebody actually played get a column.
+    let queues: Vec<u16> = QUEUES.into_iter().filter(|q| report.players.iter().any(|p| p.ranks.iter().any(|r| r.queue == *q))).collect();
+    let columns: Vec<(u16, u32)> = queues.iter().copied().zip(if queues.len() > 1 { vec![1184, 1432] } else { vec![1308] }).collect();
+    for (queue, x) in &columns { cv.text(*x, y + 6, 13, GREEN, 700, "middle", &lang.queue(*queue)); }
     y += 20;
     for p in &report.players {
         let lp = p.lp();
@@ -148,7 +134,8 @@ fn table(cv: &mut Canvas, y: u32, report: &Report, lang: Lang, art: &Assets) -> 
         cv.text(120, y + 30, 19, TEXT, 700, "start", &short(&p.name, 20));
         let subtitle = p.champions.first().map(|(c, n)| format!("{} ×{n}", art.names.get(c).map_or(c.as_str(), String::as_str))).unwrap_or_default();
         cv.text(120, y + 54, 12, DIM, 400, "start", &short(&subtitle, 22));
-        if let Some(delta) = lp {
+        // The queue column already shows a single queue's change; the chip adds the total across queues.
+        if let Some(delta) = lp.filter(|_| p.ranks.iter().filter(|r| r.delta.is_some()).count() > 1) {
             let label = format!("{delta:+} LP");
             let width = 16 + label.chars().count() as u32 * 8;
             cv.rect(412 - width, y + 40, width, 21, 10, if delta < 0 { "#4a2534" } else { "#183f37" });
@@ -167,8 +154,8 @@ fn table(cv: &mut Canvas, y: u32, report: &Report, lang: Lang, art: &Assets) -> 
             cv.text(x, y + 31, 20, TEXT, 700, "middle", &value);
             cv.text(x, y + 55, 11, FAINT, 400, "middle", &detail);
         }
-        for (queue, x) in QUEUES.iter().zip(QUEUE_X) {
-            match p.ranks.iter().find(|r| r.queue == *queue) {
+        for (queue, x) in columns.iter().copied() {
+            match p.ranks.iter().find(|r| r.queue == queue) {
                 Some(line) => {
                     match &line.rank {
                         Some(rank) => cv.text(x, y + 28, 13, tier_color(&rank.tier), 700, "middle", &lang.rank(rank)),

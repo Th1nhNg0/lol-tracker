@@ -241,17 +241,12 @@ catalog! {
     WinsOfGames: "{}/{} thắng", "{}/{} W";
     DamagePerGame: "{} sát thương/trận", "{} DMG/game";
     SmallSample: "ít trận", "small sample";
-    ReportDateFormat: "%d/%m/%Y %H:%M", "%Y-%m-%d %H:%M";
     MonthlyReport: "Tổng kết tháng {}", "Monthly report · {}";
     MonthFormat: "%m/%Y", "%B %Y";
     ReportRangeFormat: "%d/%m/%Y", "%d %b %Y";
     ReportBadge: "LOL TRACKER  /  BÁO CÁO", "LOL TRACKER  /  REPORT";
     MatchesCount: "{} trận", "{} matches";
-    PlayerGames: "{} lượt chơi", "{} player-games";
-    PlayersCount: "{} người chơi", "{} players";
     GroupLp: "TỔNG LP NHÓM", "GROUP LP";
-    LpGained: "TĂNG +{} LP", "GAINED +{} LP";
-    LpLost: "GIẢM -{} LP", "LOST -{} LP";
     HonoursSection: "Danh hiệu", "Honours";
     TableSection: "Thống kê & thay đổi hạng", "Player stats & rank movement";
     TableDetail: "Tổng LP Solo/Duo + Flex · cao đến thấp", "Total Solo/Duo + Flex LP · high to low";
@@ -280,7 +275,6 @@ catalog! {
     ImgRemake: "CHƠI LẠI", "REMAKE";
     ImgWin: "THẮNG", "WIN";
     ImgLoss: "THUA", "LOSS";
-    ImgTrackedPlayers: "{} người chơi được theo dõi", "{} tracked players";
     ImgPreview: "XEM TRƯỚC · TRẬN THẬT", "PREVIEW · REAL MATCH";
     PreviewPost: "**Xem trước bảng điểm từ một trận đấu thật.** Không khởi động gateway hay LLM.", "**Scoreboard preview from a real match.** No gateway session or LLM was started.";
     ImgGoldDifference: "CHÊNH LỆCH VÀNG", "GOLD DIFFERENCE";
@@ -295,7 +289,6 @@ catalog! {
     ImgGold: "VÀNG", "GOLD";
     ImgVision: "TẦM NHÌN", "VISION";
     ImgItems: "TRANG BỊ", "ITEMS";
-    ImgTeamTotals: "{} hạ gục  ·  {} vàng  ·  {} sát thương", "{} K  /  {} G  /  {} DMG";
     ImgWards: "{} mắt · {} mắt tím", "{}w · {}c";
     ImgDateFormat: "%d/%m/%Y  ·  %H:%M %Z", "%d %b %Y  ·  %H:%M %Z";
 }
