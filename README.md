@@ -52,11 +52,11 @@ Everything above is rendered from anonymised sample data. Set `language = "vi"` 
 
 The scoreboard is posted first, then the commentary is edited into the message text a few seconds later:
 
-> 🛡️ **Atlas** — *Stone Wall*: Ornn soaked 48k damage and still showed up for 18 assists, but Malphite out-traded him all game.
-> 🔥 **Pixel** — *Jungle Furnace*: 20 takedowns, 13 deaths. The fire was real, the exit wasn't.
-> 🌙 **Zephyr** — *Midnight Shift*: Even farm with Yasuo, three extra deaths. Quiet game, loud ending.
+> 🔥 **Pixel** — *Furnace Mode*: 17 kills, 10 deaths and 53k damage taken. Everyone was warm, nobody went home.
+> 🛡️ **Mochi** — *Held the Line*: 9/6/15 while soaking 46k damage, and the loudest voice in the lobby.
+> 👀 **Rook** — *Ward Hoarder*: 114 vision score and 2 kills. The map has never been so well lit or the scoreboard so quiet.
 >
-> **Key player:** Juniper — 43k damage from support, the only reason it was close.
+> **Key player:** Juniper — 45k damage, the top of his team, in a loss that was decided by six kills.
 
 *(Illustrative text. The tone is entirely controlled by your `prompt.md`.)*
 
