@@ -1,22 +1,18 @@
-//! Daily/weekly/monthly report ard: group LP, honours, per-player statistics and ranks, pairs.
-use crate::{App, i18n::{Lang, Msg}, render::{BLUE, Canvas, DIM, FAINT, GOLD, GREEN, HERO_DEFS, RED, TEXT, WIDTH, blocking, compact, rasterize, short},
+//! Daily/weekly/monthly report card: group LP, a few honours and one LP bar per player.
+use crate::{App, i18n::{Lang, Msg}, render::{BLUE, Canvas, tier_color, DIM, FAINT, GOLD, GREEN, HERO_DEFS, RED, TEXT, blocking, rasterize, short},
     render_assets::{Assets, Wanted}, reports::{PlayerLine, Report}};
 use anyhow::{Result, ensure};
 use std::path::Path;
 
-const HERO: u32 = 232;
-const ROW: u32 = 80;
-const QUEUES: [u16; 2] = [420, 440];
+const WIDTH: u32 = 1200;
+const HERO: u32 = 236;
 const AWARD_COLORS: [&str; 6] = [GOLD, RED, "#ff9e46", GREEN, "#50d7e6", BLUE];
+const ROW: u32 = 72;
+const MARGIN: u32 = 32;
+/// Zero line of the LP bars and the longest bar in either direction.
+const ZERO_X: u32 = 660;
+const SPAN: u32 = 190;
 
-fn tier_color(tier: &str) -> &'static str {
-    match tier {
-        "IRON" => "#9a9a9a", "BRONZE" => "#c58b65", "SILVER" => "#b8c4d0", "GOLD" => "#e6c06a",
-        "PLATINUM" => "#4fc1b8", "EMERALD" => "#3fcf86", "DIAMOND" => "#7aa8ff", "MASTER" => "#c27cf0",
-        "GRANDMASTER" => "#ff6b6b", "CHALLENGER" => "#f5d77a", _ => DIM,
-    }
-}
-fn delta_color(delta: i64) -> &'static str { if delta > 0 { GREEN } else if delta < 0 { RED } else { DIM } }
 fn top_champion(p: &PlayerLine) -> Option<&str> { p.champions.first().map(|(c, _)| c.as_str()) }
 fn portrait<'a>(art: &'a Assets, p: &PlayerLine) -> Option<&'a str> { top_champion(p).and_then(|c| art.image(&format!("champion:{c}"))) }
 
@@ -36,49 +32,62 @@ pub fn card(report: &Report, lang: Lang, art: &Assets) -> Result<Vec<u8>> {
     let mut y = hero(&mut cv, report, lang, art);
     let awards = report.awards(lang);
     if !awards.is_empty() {
-        y = section(&mut cv, y, lang.t(Msg::HonoursSection), "", GOLD);
-        let (width, height, gap) = (501, 104, 16);
+        let (gap, height) = (14, 88);
+        let width = (WIDTH - 2 * MARGIN - 2 * gap) / 3;
         for (index, award) in awards.iter().enumerate() {
-            let x = 32 + (index as u32 % 3) * (width + gap);
+            let x = MARGIN + (index as u32 % 3) * (width + gap);
             let top = y + (index as u32 / 3) * (height + gap);
             let color = if award.negative { RED } else { AWARD_COLORS[index % AWARD_COLORS.len()] };
             let player = &report.players[award.player];
-            cv.rect(x, top, width, height, 16, "#182131");
+            cv.rect(x, top, width, height, 16, "#142033");
             cv.outline(x, top, width, height, 16, "#273144");
-            cv.rect(x + 20, top + 23, 18, 3, 1, color);
-            cv.text(x + 48, top + 29, 13, color, 700, "start", &lang.t(award.title).to_uppercase());
-            cv.text(x + 20, top + 63, 22, TEXT, 700, "start", &short(&player.name, 24));
-            cv.text(x + 20, top + 88, 14, DIM, 400, "start", &award.value);
-            cv.image(portrait(art, player), x + width - 76, top + 24, 56, 56, 14);
-            cv.outline(x + width - 76, top + 24, 56, 56, 14, color);
+            cv.rect(x + 18, top + 22, 16, 3, 1, color);
+            cv.text(x + 42, top + 28, 12, color, 700, "start", &lang.t(award.title).to_uppercase());
+            cv.text(x + 18, top + 56, 20, TEXT, 700, "start", &short(&player.name, 17));
+            cv.text(x + 18, top + 77, 13, DIM, 400, "start", &award.value);
+            cv.image(portrait(art, player), x + width - 70, top + 18, 52, 52, 14);
+            cv.outline(x + width - 70, top + 18, 52, 52, 14, color);
         }
-        y += awards.len().div_ceil(3) as u32 * (height + gap) + 14;
+        y += awards.len().div_ceil(3) as u32 * (height + gap) + 8;
     }
-    y = table(&mut cv, y, report, lang, art);
-    if !report.pairs.is_empty() {
-        y = section(&mut cv, y, lang.t(Msg::PairsSection), lang.t(Msg::PairsDetail), BLUE);
-        let (width, height, gap) = (760, 66, 16);
-        for (index, pair) in report.pairs.iter().enumerate() {
-            let x = 32 + (index as u32 % 2) * (width + gap);
-            let top = y + (index as u32 / 2) * (height + 10);
-            let rate = pair.wins as f64 / pair.games.max(1) as f64;
-            cv.rect(x, top, width, height, 14, "#182131");
-            cv.outline(x, top, width, height, 14, "#273144");
-            cv.text(x + 22, top + 29, 17, TEXT, 700, "start", &format!("{} + {}", short(&pair.a, 18), short(&pair.b, 18)));
-            cv.text(x + 22, top + 51, 12, DIM, 400, "start", &lang.f(Msg::WinsOfGames, &[&pair.wins, &pair.games]));
-            cv.rect(x + 450, top + 29, 220, 8, 4, "#344056");
-            cv.rect(x + 450, top + 29, (rate * 220.0).round() as u32, 8, 4, if rate >= 0.5 { GREEN } else { RED });
-            cv.text(x + width - 22, top + 38, 17, if rate >= 0.5 { GREEN } else { RED }, 700, "end", &format!("{:.0}%", rate * 100.0));
+    let widest = report.players.iter().filter_map(PlayerLine::lp).map(i64::abs).max().unwrap_or(0).max(1);
+    let last = report.players.len() - 1;
+    for (index, p) in report.players.iter().enumerate() {
+        let lp = p.lp();
+        // The biggest climber and the biggest drop get a coloured frame.
+        let frame = match lp { Some(d) if index == 0 && d > 0 => Some(GREEN), Some(d) if index == last && index > 0 && d < 0 => Some(RED), _ => None };
+        cv.rect(MARGIN, y, WIDTH - 2 * MARGIN, ROW - 8, 16, "#131d2f");
+        if let Some(color) = frame { cv.outline(MARGIN, y, WIDTH - 2 * MARGIN, ROW - 8, 16, color); }
+        cv.image(portrait(art, p), 50, y + 8, 48, 48, 12);
+        cv.outline(50, y + 8, 48, 48, 12, frame.unwrap_or("#2c3a50"));
+        cv.text(116, y + 30, 19, TEXT, 700, "start", &short(&p.name, 22));
+        cv.text(116, y + 51, 12, DIM, 400, "start", &lang.f(Msg::FmtWinRate, &[&format!("{:.0}", p.win_rate()), &p.games]));
+        cv.rect(ZERO_X, y + 12, 2, ROW - 32, 1, "#2a3549");
+        match lp {
+            Some(0) => cv.text(ZERO_X + 14, y + 40, 22, DIM, 700, "start", "0"),
+            Some(delta) => {
+                let length = (delta.unsigned_abs() as f64 / widest as f64 * f64::from(SPAN)).round().max(8.0) as u32;
+                let (color, label, radius) = (if delta < 0 { RED } else { GREEN }, format!("{delta:+}"), (length / 2).min(12));
+                if delta < 0 {
+                    cv.rect(ZERO_X + 2 - length, y + 20, length, 24, radius, color);
+                    cv.text(ZERO_X - length - 12, y + 40, 22, color, 700, "end", &label);
+                } else {
+                    cv.rect(ZERO_X, y + 20, length, 24, radius, color);
+                    cv.text(ZERO_X + length + 12, y + 40, 22, color, 700, "start", &label);
+                }
+            }
+            None => cv.text(ZERO_X + 14, y + 37, 13, FAINT, 400, "start", lang.t(Msg::LpUnknown)),
         }
-        y += report.pairs.len().div_ceil(2) as u32 * (height + 10) + 14;
+        // Current rank in the queue played most.
+        if let Some(line) = p.ranks.iter().filter(|r| r.rank.is_some()).max_by_key(|r| r.games)
+            && let Some(rank) = &line.rank
+        {
+            cv.text(WIDTH - 50, y + 30, 15, tier_color(&rank.tier), 700, "end", &lang.rank(rank));
+            cv.text(WIDTH - 50, y + 51, 12, FAINT, 400, "end", &lang.queue(line.queue));
+        }
+        y += ROW;
     }
-    if report.partial_lp {
-        cv.text(32, y + 12, 13, DIM, 400, "start", lang.t(Msg::PartialLp));
-        y += 28;
-    }
-    let height = y + 44;
-    cv.rect(32, y + 4, WIDTH - 64, 1, 0, "#273144");
-    cv.text(WIDTH - 32, y + 28, 12, GOLD, 700, "end", "LOL TRACKER");
+    let height = y + 20;
     let svg = format!("<svg xmlns='http://www.w3.org/2000/svg' width='{WIDTH}' height='{height}'>{HERO_DEFS}<g font-family='Be Vietnam Pro,DejaVu Sans,sans-serif'><rect width='{WIDTH}' height='{height}' fill='#0b1220'/>{}</g></svg>", cv.svg);
     ensure!(height <= 8000, "Report exceeds image bounds");
     rasterize(&svg, WIDTH, height)
@@ -86,91 +95,21 @@ pub fn card(report: &Report, lang: Lang, art: &Assets) -> Result<Vec<u8>> {
 
 fn hero(cv: &mut Canvas, report: &Report, lang: Lang, art: &Assets) -> u32 {
     if let Some(splash) = art.image("splash") {
-        cv.image(Some(splash), 0, 0, WIDTH, HERO - 16, 0);
-    } else { cv.rect(0, 0, WIDTH, HERO - 16, 0, "#182334"); }
-    cv.rect(0, 0, WIDTH, HERO - 16, 0, "url(#heroShade)");
-    cv.rect(0, HERO - 140, WIDTH, 124, 0, "url(#fade)");
+        cv.image(Some(splash), 0, 0, WIDTH, HERO, 0);
+    } else { cv.rect(0, 0, WIDTH, HERO, 0, "#182334"); }
+    cv.rect(0, 0, WIDTH, HERO, 0, "url(#heroShade)");
+    cv.rect(0, HERO - 110, WIDTH, 110, 0, "url(#fade)");
     let net = report.net_lp();
     let accent = net.map_or(BLUE, |n| if n >= 0 { GREEN } else { RED });
-    cv.rect(0, 32, 5, 160, 0, accent);
-    cv.text(54, 44, 13, GOLD, 700, "start", lang.t(Msg::ReportBadge));
-    cv.text(50, 112, 52, accent, 700, "start", &short(&report.title(lang).to_uppercase(), 34));
-    cv.text(54, 152, 22, TEXT, 700, "start", &report.range(lang));
-    cv.text(54, 184, 16, DIM, 400, "start", &lang.f(Msg::MatchesCount, &[&report.matches]));
-    cv.rect(1142, 52, 402, 139, 20, "rgba(8,14,25,.84)");
-    cv.outline(1142, 52, 402, 139, 20, "#39465a");
-    cv.text(1343, 84, 13, DIM, 700, "middle", lang.t(Msg::GroupLp));
-    cv.text(1343, 158, 58, accent, 700, "middle", &net.map_or_else(|| "—".to_owned(), |n| format!("{n:+} LP")));
-    HERO + 14
+    cv.rect(0, 36, 5, 150, 0, accent);
+    cv.text(54, 56, 13, GOLD, 700, "start", lang.t(Msg::ReportBadge));
+    cv.text(50, 124, 54, accent, 700, "start", &short(&report.title(lang).to_uppercase(), 24));
+    cv.text(54, 162, 22, TEXT, 700, "start", &report.range(lang));
+    cv.text(54, 192, 15, DIM, 400, "start", &lang.f(Msg::MatchesCount, &[&report.matches]));
+    let left = WIDTH - 372;
+    cv.rect(left, 48, 320, 136, 22, "rgba(8,14,25,.82)");
+    cv.outline(left, 48, 320, 136, 22, "#39465a");
+    cv.text(left + 160, 82, 12, DIM, 700, "middle", lang.t(Msg::GroupLp));
+    cv.text(left + 160, 148, 54, accent, 700, "middle", &net.map_or_else(|| "—".to_owned(), |n| format!("{n:+} LP")));
+    HERO + 16
 }
-
-fn section(cv: &mut Canvas, y: u32, title: &str, detail: &str, color: &str) -> u32 {
-    cv.rect(32, y, WIDTH - 64, 52, 13, "#142033");
-    cv.outline(32, y, WIDTH - 64, 52, 13, "#2b3a52");
-    cv.rect(32, y + 8, 4, 36, 2, color);
-    cv.text(54, y + 34, 21, color, 700, "start", &title.to_uppercase());
-    if !detail.is_empty() { cv.text(WIDTH - 56, y + 33, 14, DIM, 400, "end", detail); }
-    y + 66
-}
-
-fn table(cv: &mut Canvas, y: u32, report: &Report, lang: Lang, art: &Assets) -> u32 {
-    let mut y = section(cv, y, lang.t(Msg::TableSection), lang.t(Msg::TableDetail), GREEN);
-    for (x, label) in [(470, lang.t(Msg::ColGames)), (590, "KDA"), (710, lang.t(Msg::ColCsMin)), (830, lang.t(Msg::ImgDamage)), (950, lang.t(Msg::ImgVision))] {
-        cv.text(x, y + 6, 11, FAINT, 700, "middle", label);
-    }
-    cv.text(120, y + 6, 11, FAINT, 700, "start", lang.t(Msg::ColPlayer));
-    // Only queues somebody actually played get a column.
-    let queues: Vec<u16> = QUEUES.into_iter().filter(|q| report.players.iter().any(|p| p.ranks.iter().any(|r| r.queue == *q))).collect();
-    let columns: Vec<(u16, u32)> = queues.iter().copied().zip(if queues.len() > 1 { vec![1184, 1432] } else { vec![1308] }).collect();
-    for (queue, x) in &columns { cv.text(*x, y + 6, 13, GREEN, 700, "middle", &lang.queue(*queue)); }
-    y += 20;
-    for p in &report.players {
-        let lp = p.lp();
-        let losing = lp.is_some_and(|d| d < 0);
-        cv.rect(32, y, WIDTH - 64, 72, 13, if losing { "#2a1f2b" } else { "#172438" });
-        cv.outline(32, y, WIDTH - 64, 72, 13, if losing { "#633447" } else { "#34546f" });
-        cv.image(portrait(art, p), 49, y + 9, 54, 54, 11);
-        cv.outline(49, y + 9, 54, 54, 11, if losing { RED } else { BLUE });
-        cv.text(120, y + 30, 19, TEXT, 700, "start", &short(&p.name, 20));
-        let subtitle = p.champions.first().map(|(c, n)| format!("{} ×{n}", art.names.get(c).map_or(c.as_str(), String::as_str))).unwrap_or_default();
-        cv.text(120, y + 54, 12, DIM, 400, "start", &short(&subtitle, 22));
-        // The queue column already shows a single queue's change; the chip adds the total across queues.
-        if let Some(delta) = lp.filter(|_| p.ranks.iter().filter(|r| r.delta.is_some()).count() > 1) {
-            let label = format!("{delta:+} LP");
-            let width = 16 + label.chars().count() as u32 * 8;
-            cv.rect(412 - width, y + 40, width, 21, 10, if delta < 0 { "#4a2534" } else { "#183f37" });
-            cv.text(412 - width / 2, y + 55, 12, delta_color(delta), 700, "middle", &label);
-        }
-        cv.text(470, y + 31, 22, TEXT, 700, "middle", &p.games.to_string());
-        let record = format!("{}-{} · {:.0}%", p.wins, p.games - p.wins, p.win_rate());
-        cv.text(470, y + 55, 11, if p.wins * 2 >= p.games { GREEN } else { RED }, 700, "middle", &record);
-        let average = |v: i64| v as f64 / p.games.max(1) as f64;
-        for (x, value, detail) in [
-            (590, format!("{:.2}", p.kda()), format!("{:.1}/{:.1}/{:.1}", average(p.kills), average(p.deaths), average(p.assists))),
-            (710, format!("{:.1}", p.cs_per_min()), format!("{:.0}{}", average(p.cs), lang.t(Msg::PerGame))),
-            (830, compact(p.damage_per_game().round() as i64), lang.t(Msg::PerGame).to_owned()),
-            (950, format!("{:.2}", p.vision_per_min()), lang.t(Msg::PerMinute).to_owned()),
-        ] {
-            cv.text(x, y + 31, 20, TEXT, 700, "middle", &value);
-            cv.text(x, y + 55, 11, FAINT, 400, "middle", &detail);
-        }
-        for (queue, x) in columns.iter().copied() {
-            match p.ranks.iter().find(|r| r.queue == queue) {
-                Some(line) => {
-                    match &line.rank {
-                        Some(rank) => cv.text(x, y + 28, 13, tier_color(&rank.tier), 700, "middle", &lang.rank(rank)),
-                        None => cv.text(x, y + 28, 13, FAINT, 400, "middle", lang.t(Msg::RankNoData)),
-                    }
-                    match line.delta {
-                        Some(delta) => cv.text(x, y + 56, 20, delta_color(delta), 700, "middle", &format!("{delta:+} LP")),
-                        None => cv.text(x, y + 54, 13, FAINT, 400, "middle", lang.t(Msg::LpUnknown)),
-                    }
-                }
-                None => cv.text(x, y + 43, 20, FAINT, 400, "middle", "–"),
-            }
-        }
-        y += ROW;
-    }
-    y + 6
-}
-

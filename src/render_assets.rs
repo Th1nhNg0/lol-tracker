@@ -7,9 +7,12 @@ use serde_json::Value;
 use std::{collections::{BTreeMap, BTreeSet, HashMap}, fs, path::{Path, PathBuf}, time::{Duration, SystemTime}};
 use tokio::task::JoinSet;
 
+/// Objective icon names on Community Dragon, one blue (100) and one red (200) file each.
+pub const OBJECTIVES: [&str; 5] = ["dragon", "baron", "herald", "tower", "inhibitor"];
+
 /// Artwork an image needs, keyed by Match-V5 champion names and numeric IDs.
 #[derive(Default)]
-pub struct Wanted { pub champions: BTreeSet<String>, pub splash: Option<String>, pub items: BTreeSet<i64>, pub spells: BTreeSet<i64>, pub runes: BTreeSet<i64> }
+pub struct Wanted { pub champions: BTreeSet<String>, pub splash: Option<String>, pub items: BTreeSet<i64>, pub objectives: bool }
 impl Wanted {
     pub fn from_match(game: &Match) -> Self {
         let focus = game.participants.iter().filter(|p| p.tracked).max_by_key(|p| p.damage).or_else(|| game.participants.first());
@@ -17,14 +20,13 @@ impl Wanted {
             champions: game.participants.iter().map(|p| p.champion.clone()).collect(),
             splash: focus.map(|p| p.champion.clone()),
             items: game.participants.iter().flat_map(|p| p.items.iter().copied()).filter(|id| *id > 0).collect(),
-            spells: game.participants.iter().flat_map(|p| p.spells.iter().copied()).collect(),
-            runes: game.participants.iter().flat_map(|p| p.runes.iter().copied()).collect(),
+            objectives: !game.objectives.is_empty(),
         }
     }
 }
 
 #[derive(Default)]
-pub struct Assets { pub images: HashMap<String, String>, pub version: String, pub names: HashMap<String, String> }
+pub struct Assets { pub images: HashMap<String, String>, pub names: HashMap<String, String> }
 impl Assets {
     pub fn image(&self, key: &str) -> Option<&str> { self.images.get(key).map(String::as_str) }
     pub async fn load(wanted: Wanted, directory: PathBuf) -> Self {
@@ -51,26 +53,8 @@ impl Assets {
                 && let Some(id) = champ["id"].as_str() { jobs.insert("splash".into(), format!("/cdn/img/champion/splash/{id}_0.jpg")); }
         }
         for id in &wanted.items { jobs.insert(format!("item:{id}"), format!("/cdn/{version}/img/item/{id}.png")); }
-        if !wanted.spells.is_empty() {
-            let spells = cache.json(&format!("/cdn/{version}/data/en_US/summoner.json")).await.unwrap_or(Value::Null);
-            for id in &wanted.spells {
-                if let Some(file) = spells["data"].as_object().and_then(|m| m.values().find(|v| v["key"].as_str().and_then(|s| s.parse::<i64>().ok()) == Some(*id))).and_then(|v| v["image"]["full"].as_str()) {
-                    jobs.insert(format!("spell:{id}"), format!("/cdn/{version}/img/spell/{file}"));
-                }
-            }
-        }
-        if !wanted.runes.is_empty() {
-            let runes = cache.json(&format!("/cdn/{version}/data/en_US/runesReforged.json")).await.unwrap_or(Value::Null);
-            let mut rune_icons = HashMap::new();
-            for style in runes.as_array().into_iter().flatten() {
-                if let (Some(id), Some(icon)) = (style["id"].as_i64(), style["icon"].as_str()) { rune_icons.insert(id, icon.to_owned()); }
-                for rune in style["slots"].as_array().into_iter().flatten().flat_map(|slot| slot["runes"].as_array().into_iter().flatten()) {
-                    if let (Some(id), Some(icon)) = (rune["id"].as_i64(), rune["icon"].as_str()) { rune_icons.insert(id, icon.to_owned()); }
-                }
-            }
-            for id in &wanted.runes {
-                if let Some(icon) = rune_icons.get(id) { jobs.insert(format!("rune:{id}"), format!("/cdn/img/{icon}")); }
-            }
+        if wanted.objectives {
+            for kind in OBJECTIVES { for team in [100, 200] { jobs.insert(format!("objective:{kind}-{team}"), format!("/objective/{kind}-{team}.png")); } }
         }
         let mut images = HashMap::new();
         let mut running = JoinSet::new();
@@ -89,7 +73,7 @@ impl Assets {
         let directory = cache.directory.clone();
         tokio::task::spawn_blocking(move || prune(&directory));
         tracing::info!(images = images.len(), "Prepared public Data Dragon artwork");
-        Ok(Self { images, version, names })
+        Ok(Self { images, names })
     }
 }
 #[derive(Clone)]
@@ -99,13 +83,18 @@ impl Cache {
         serde_json::from_slice(&self.bytes(path, Duration::from_secs(86400)).await?).map_err(|_| anyhow::anyhow!("Invalid artwork metadata"))
     }
     async fn bytes(&self, path: &str, age: Duration) -> Result<Vec<u8>> {
-        ensure!(path.len() <= 220 && (path.starts_with("/cdn/") || path == "/api/versions.json") && !path.split('/').any(|p| p == "..")
+        ensure!(path.len() <= 220 && (path.starts_with("/cdn/") || path.starts_with("/objective/") || path == "/api/versions.json") && !path.split('/').any(|p| p == "..")
             && path.chars().all(|c| c.is_ascii_alphanumeric() || "/._-".contains(c)), "Invalid artwork path");
         let file = self.directory.join(path.replace('/', "_"));
         if let Ok(meta) = fs::metadata(&file)
             && meta.len() <= 2 * 1024 * 1024 && meta.modified().ok().and_then(|t| t.elapsed().ok()).is_some_and(|a| a < age)
                 && let Ok(bytes) = fs::read(&file) { return Ok(bytes); }
-        let response = self.http.get(format!("https://ddragon.leagueoflegends.com{path}")).send().await.map_err(|_| anyhow::anyhow!("Artwork network request failed"))?;
+        // Objective icons are the match-history assets of the League client, published by Community Dragon.
+        let url = match path.strip_prefix("/objective/") {
+            Some(name) => format!("https://raw.communitydragon.org/latest/plugins/rcp-fe-lol-match-history/global/default/{name}"),
+            None => format!("https://ddragon.leagueoflegends.com{path}"),
+        };
+        let response = self.http.get(url).send().await.map_err(|_| anyhow::anyhow!("Artwork network request failed"))?;
         ensure!(response.status().is_success(), "Artwork temporarily unavailable");
         let bytes = bounded_body(response, 2 * 1024 * 1024).await?;
         fs::write(file, &bytes)?;

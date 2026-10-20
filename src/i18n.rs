@@ -248,14 +248,6 @@ catalog! {
     MatchesCount: "{} trận", "{} matches";
     GroupLp: "TỔNG LP NHÓM", "GROUP LP";
     HonoursSection: "Danh hiệu", "Honours";
-    TableSection: "Thống kê & thay đổi hạng", "Player stats & rank movement";
-    TableDetail: "Tổng LP Solo/Duo + Flex · cao đến thấp", "Total Solo/Duo + Flex LP · high to low";
-    ColPlayer: "NGƯỜI CHƠI", "PLAYER";
-    ColGames: "TRẬN", "GAMES";
-    ColCsMin: "CS/PHÚT", "CS/MIN";
-    PerGame: "/trận", "/game";
-    PerMinute: "/phút", "/min";
-    PairsDetail: "Cùng đội · nhiều trận nhất", "Same team · most games first";
     AwKills: "Hạ gục nhiều nhất", "Most kills";
     AwDeaths: "Chết nhiều nhất", "Most deaths";
     AwDamage: "Sát thương cao nhất", "Top damage";
@@ -277,11 +269,6 @@ catalog! {
     ImgLoss: "THUA", "LOSS";
     ImgPreview: "XEM TRƯỚC · TRẬN THẬT", "PREVIEW · REAL MATCH";
     PreviewPost: "**Xem trước bảng điểm từ một trận đấu thật.** Không khởi động gateway hay LLM.", "**Scoreboard preview from a real match.** No gateway session or LLM was started.";
-    ImgGoldDifference: "CHÊNH LỆCH VÀNG", "GOLD DIFFERENCE";
-    ImgDragon: "RỒNG", "DRAGON";
-    ImgBaron: "BARON", "BARON";
-    ImgTower: "TRỤ", "TOWER";
-    ImgInhibitor: "NHÀ LÍNH", "INHIB";
     ImgMvp: "MVP", "MVP";
     ImgWorst: "CHƠI TỆ", "WORST";
     ImgDamage: "SÁT THƯƠNG", "DAMAGE";
@@ -289,6 +276,5 @@ catalog! {
     ImgGold: "VÀNG", "GOLD";
     ImgVision: "TẦM NHÌN", "VISION";
     ImgItems: "TRANG BỊ", "ITEMS";
-    ImgWards: "{} mắt · {} mắt tím", "{}w · {}c";
     ImgDateFormat: "%d/%m/%Y  ·  %H:%M %Z", "%d %b %Y  ·  %H:%M %Z";
 }
