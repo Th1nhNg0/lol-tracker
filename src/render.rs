@@ -1,5 +1,5 @@
 //! Independently authored Rust scoreboard with public Data Dragon artwork.
-use crate::{App, i18n::{Lang, Msg}, model::{Match, Participant, n}, presentation::{self, plain}, render_assets::{Assets, Wanted}};
+use crate::{App, i18n::{Lang, Msg}, model::{Match, Participant, n}, presentation::{self, Badge, plain}, render_assets::{Assets, Wanted}};
 use anyhow::{Result, ensure};
 use resvg::usvg::fontdb;
 use serde_json::Value;
@@ -65,7 +65,7 @@ pub fn scoreboard(game: &Match, lang: Lang, timezone: &str, preview: bool, art: 
     cv.svg.push_str(SCOREBOARD_DEFS);
     cv.svg.push_str("<g font-family='Be Vietnam Pro,DejaVu Sans,sans-serif'>");
     cv.rect(0, 0, WIDTH, height, 0, "url(#page)");
-    let standouts = presentation::standouts(game);
+    let badges = presentation::badges(game);
     if let Some(splash) = art.image("splash") {
         let _ = write!(cv.svg, "<defs><clipPath id='hero'><rect width='{WIDTH}' height='324'/></clipPath></defs><image href='{splash}' width='{WIDTH}' height='324' preserveAspectRatio='xMidYMin slice' clip-path='url(#hero)'/>");
     } else { cv.rect(0, 0, WIDTH, 324, 0, "#182334"); }
@@ -101,13 +101,15 @@ pub fn scoreboard(game: &Match, lang: Lang, timezone: &str, preview: bool, art: 
             cv.text(x, 156, 63, color(*id), 700, "middle", &players.iter().map(|p| p.kills).sum::<i64>().to_string());
         }
         cv.text(1344, 128, 14, FAINT, 700, "middle", "VS");
-        // The tracked team's standout (same deterministic score as the text verdict).
-        if let Some(star) = game.participants.iter().find(|p| p.team == focus_team && standouts.contains(&p.id)) {
+        // The tracked team's MVP/ACE (same deterministic score as the text verdict).
+        let star = game.participants.iter().find_map(|p| badges.iter().find(|(id, b)| *id == p.id && p.team == focus_team && *b != Badge::Worst).map(|(_, b)| (p, *b)));
+        if let Some((star, badge)) = star {
+            let (label, ink, _) = badge_style(badge, lang);
             cv.rect(1142, 203, 402, 62, 16, "rgba(8,14,25,.84)");
-            cv.outline(1142, 203, 402, 62, 16, "#6b5a2a");
+            cv.outline(1142, 203, 402, 62, 16, "#4a4f5c");
             cv.image(art.image(&format!("champion:{}", star.champion)), 1156, 211, 46, 46, 12);
-            cv.outline(1156, 211, 46, 46, 12, GOLD);
-            cv.text(1216, 229, 11, GOLD, 700, "start", lang.t(Msg::ImgStandout));
+            cv.outline(1156, 211, 46, 46, 12, ink);
+            cv.text(1216, 229, 11, ink, 700, "start", label);
             cv.text(1216, 252, 17, TEXT, 700, "start", &format!("{}  ·  {}/{}/{}", short(&star.name, 20), star.kills, star.deaths, star.assists));
         }
         let a: i64 = teams[0].1.iter().map(|p| p.gold).sum();
@@ -122,7 +124,7 @@ pub fn scoreboard(game: &Match, lang: Lang, timezone: &str, preview: bool, art: 
     let mut top = 350;
     for (team, mut players) in teams {
         players.sort_by_key(|p| p.id);
-        draw_team(&mut cv, game, team, &players, top, lang, art, &standouts);
+        draw_team(&mut cv, game, team, &players, top, lang, art, &badges);
         top += 106 + ROW * players.len() as u32;
     }
     cv.text(48, height - 19, 12, FAINT, 400, "start", &format!("{}  ·  Data Dragon {}", game.id, art.version));
@@ -268,7 +270,15 @@ fn pill(cv: &mut Canvas, x: u32, y: u32, height: u32, fill: &str, color: &str, s
     width
 }
 
-fn draw_team(cv: &mut Canvas, game: &Match, team: u16, players: &[&Participant], top: u32, lang: Lang, art: &Assets, standouts: &[u64]) {
+/// Label, ink and pill fill for a scoreboard badge.
+fn badge_style(badge: Badge, lang: Lang) -> (&'static str, &'static str, &'static str) {
+    match badge {
+        Badge::Mvp => (lang.t(Msg::ImgMvp), GOLD, "#3d3418"),
+        Badge::Ace => (lang.t(Msg::ImgAce), "#c4cee4", "#2a3242"),
+        Badge::Worst => (lang.t(Msg::ImgWorst), RED, "#3d1d26"),
+    }
+}
+fn draw_team(cv: &mut Canvas, game: &Match, team: u16, players: &[&Participant], top: u32, lang: Lang, art: &Assets, badges: &[(u64, Badge)]) {
     let tint = color(team);
     let style = if team == 100 { "100" } else { "200" };
     let won = players.first().is_some_and(|p| p.win);
@@ -298,7 +308,7 @@ fn draw_team(cv: &mut Canvas, game: &Match, team: u16, players: &[&Participant],
     let minutes = (game.duration as f64 / 60.0).max(1.0);
     for (index, p) in players.iter().enumerate() {
         let y = top + 88 + index as u32 * ROW;
-        let standout = standouts.contains(&p.id);
+        let badge = badges.iter().find(|(id, _)| *id == p.id).map(|(_, b)| badge_style(*b, lang));
         // Tracked players stand out; everyone else sits on a quiet flat row.
         if p.tracked {
             let _ = write!(cv.svg, "<rect x='32' y='{y}' width='1536' height='72' rx='14' fill='url(#row{style})' filter='url(#shadow)'/>");
@@ -308,8 +318,8 @@ fn draw_team(cv: &mut Canvas, game: &Match, team: u16, players: &[&Participant],
             cv.rect(32, y, 1536, 72, 14, "#111a28");
         }
         cv.image(art.image(&format!("champion:{}", p.champion)), 49, y + 9, 54, 54, 12);
-        cv.outline(49, y + 9, 54, 54, 12, if standout { GOLD } else if p.tracked { tint } else { "#2c3a50" });
-        if standout { cv.outline(47, y + 7, 58, 58, 14, GOLD); }
+        cv.outline(49, y + 9, 54, 54, 12, badge.map_or(if p.tracked { tint } else { "#2c3a50" }, |(_, ink, _)| ink));
+        if let Some((_, ink, _)) = badge { cv.outline(47, y + 7, 58, 58, 14, ink); }
         if p.level > 0 {
             cv.rect(80, y + 49, 27, 19, 9, "#0b1220");
             cv.text(94, y + 63, 11, TEXT, 700, "middle", &p.level.to_string());
@@ -318,7 +328,7 @@ fn draw_team(cv: &mut Canvas, game: &Match, team: u16, players: &[&Participant],
         for (i, id) in p.runes.iter().take(2).enumerate() { cv.image(art.image(&format!("rune:{id}")), 147 + i as u32 * 3, y + 10 + i as u32 * 31, if i == 0 { 25 } else { 19 }, if i == 0 { 25 } else { 19 }, 10); }
         cv.text(187, y + 29, 19, if p.tracked { TEXT } else { "#c3cbd8" }, if p.tracked { 700 } else { 400 }, "start", &short(&p.name, 22));
         let mut x = 187;
-        if standout { x += pill(cv, x, y + 41, 19, "#3d3418", GOLD, 10, lang.t(Msg::ImgStandout)) + 8; }
+        if let Some((label, ink, fill)) = badge { x += pill(cv, x, y + 41, 19, fill, ink, 10, label) + 8; }
         let champion = art.names.get(&p.champion).map(String::as_str).unwrap_or(&p.champion);
         let secondary = match (&p.rank_after, lang.role(&p.role)) {
             (Some(rank), _) if p.tracked => lang.rank(rank),

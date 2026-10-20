@@ -1,6 +1,6 @@
 use crate::{i18n::{Lang, Msg}, model::{Match, Participant, Pending, n}};
 use serde_json::Value;
-use std::{collections::BTreeMap, fmt::Write};
+use std::fmt::Write;
 
 pub fn limit(text: &str, max: usize) -> String {
     let mut units = 0;
@@ -149,15 +149,24 @@ fn reasons(p: &Participant, team: &[&Participant], minutes: f64, good: bool, lan
     lang.t(if good { Msg::ReasonSteady } else { Msg::ReasonLowest }).into()
 }
 /// Participant IDs of each team's standout player by the same score as `verdict` (5v5 only).
-pub fn standouts(m: &Match) -> Vec<u64> {
+#[derive(Clone, Copy, PartialEq)]
+pub enum Badge { Mvp, Ace, Worst }
+/// Scoreboard badges (5v5 only), from the same score as the text verdict: each team's best player
+/// (MVP on a win, ACE on a loss) and the lowest-scoring player of each team with tracked players.
+pub fn badges(m: &Match) -> Vec<(u64, Badge)> {
     if m.remake || m.participants.len() != 10 { return Vec::new(); }
     let scores = scores(m, (m.duration as f64 / 60.0).max(1.0));
-    let mut best: BTreeMap<u16, (u64, f64)> = BTreeMap::new();
-    for (p, score) in m.participants.iter().zip(scores) {
-        let entry = best.entry(p.team).or_insert((p.id, score));
-        if score > entry.1 { *entry = (p.id, score); }
+    let mut teams: Vec<u16> = m.participants.iter().map(|p| p.team).collect();
+    teams.sort_unstable(); teams.dedup();
+    let mut out = Vec::new();
+    for team in teams {
+        let mut rows: Vec<(&Participant, f64)> = m.participants.iter().zip(&scores).filter(|(p, _)| p.team == team).map(|(p, s)| (p, *s)).collect();
+        rows.sort_by(|a, b| a.1.total_cmp(&b.1));
+        let (Some(&(worst, _)), Some(&(best, _))) = (rows.first(), rows.last()) else { continue };
+        out.push((best.id, if best.win { Badge::Mvp } else { Badge::Ace }));
+        if rows.len() > 1 && rows.iter().any(|(p, _)| p.tracked) { out.push((worst.id, Badge::Worst)); }
     }
-    best.into_values().map(|(id, _)| id).collect()
+    out
 }
 /// Standout and least-impact player of each team containing tracked players (5v5 only).
 pub fn verdict(m: &Match, lang: Lang) -> Option<String> {

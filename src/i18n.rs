@@ -301,7 +301,9 @@ catalog! {
     ImgBaron: "BARON", "BARON";
     ImgTower: "TRỤ", "TOWER";
     ImgInhibitor: "NHÀ LÍNH", "INHIB";
-    ImgStandout: "NỔI BẬT", "STANDOUT";
+    ImgMvp: "MVP", "MVP";
+    ImgAce: "ACE", "ACE";
+    ImgWorst: "CHƠI TỆ", "WORST";
     ImgDamage: "SÁT THƯƠNG", "DAMAGE";
     ImgTaken: "NHẬN VÀO", "TAKEN";
     ImgGold: "VÀNG", "GOLD";
