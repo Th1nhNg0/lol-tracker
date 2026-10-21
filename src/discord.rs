@@ -8,7 +8,7 @@ use tracing::{info, warn};
 pub struct Handler { pub app: Arc<App>, pub slots: Semaphore }
 fn mentions() -> CreateAllowedMentions { CreateAllowedMentions::new().all_users(false).all_roles(false).everyone(false).replied_user(false) }
 async fn scoreboard_image(app: &App, game: &Match) -> Option<Vec<u8>> {
-    match render::png(app, game.clone(), app.cfg.language, false).await {
+    match render::image(app, game.clone(), app.cfg.language, false).await {
         Ok(image) => Some(image),
         Err(error) => { warn!(%error, "PNG unavailable; retaining text scoreboard fallback"); None }
     }
@@ -113,7 +113,7 @@ impl Handler {
                 };
                 // Commentary is optional; the text summary only stands in when the image could not be drawn.
                 let text = if text.is_empty() && image.is_none() { view::commentary(&game, lang) } else { text };
-                Ok(Reply { text, file: image.map(|png| ("scoreboard.png".into(), png)) })
+                Ok(Reply { text, file: image.map(|data| (format!("scoreboard.{}", render::IMAGE_EXT), data)) })
             }
             "players" => {
                 let players = self.app.store.players()?;
@@ -302,7 +302,7 @@ async fn deliver(app: &App, http: &Http, delivery: &crate::store::Delivery) -> R
             // The result is the image; commentary joins it later. Text stands in only when the image failed.
             let mut create = CreateMessage::new().allowed_mentions(mentions());
             match scoreboard_image(app, m).await {
-                Some(image) => create = create.add_file(CreateAttachment::bytes(image, "scoreboard.png")),
+                Some(image) => create = create.add_file(CreateAttachment::bytes(image, format!("scoreboard.{}", render::IMAGE_EXT))),
                 None => create = create.content(view::commentary(m, lang)),
             }
             let message = safe_http(ChannelId::new(channel).send_message(http, create).await)?;
@@ -312,14 +312,14 @@ async fn deliver(app: &App, http: &Http, delivery: &crate::store::Delivery) -> R
             let channel = app.channel(true)?; ensure!(channel != 0, "Rank channel missing");
             // The card is rendered at delivery, like result scoreboards; text is the fallback.
             let card = match report {
-                Some(report) => match crate::report_card::png(app, report.clone(), lang).await {
+                Some(report) => match crate::report_card::image(app, report.clone(), lang).await {
                     Ok(png) => Some((report.title(lang), report.range(lang), png)),
                     Err(error) => { warn!(%error, "Report card unavailable; sending text"); None }
                 },
                 None => None,
             };
             let builder = match card {
-                Some((title, range, png)) => CreateMessage::new().content(format!("**{title}** · {range}")).add_file(CreateAttachment::bytes(png, "report.png")),
+                Some((title, range, png)) => CreateMessage::new().content(format!("**{title}** · {range}")).add_file(CreateAttachment::bytes(png, format!("report.{}", render::IMAGE_EXT))),
                 None if text.encode_utf16().count() <= 1900 => CreateMessage::new().content(text),
                 None => CreateMessage::new().content(lang.t(Msg::ReportAttached)).add_file(CreateAttachment::bytes(text.as_bytes(), "report.txt")),
             };
@@ -364,7 +364,7 @@ pub async fn post_preview(app: &App, token: &str, image: Vec<u8>, lang: Lang) ->
     validate_channel(&http, app.cfg.discord.guild_id, channel).await.map_err(|p| anyhow::anyhow!("Preview channel unusable: {p}"))?;
     let message = safe_http(ChannelId::new(channel).send_message(&http, CreateMessage::new()
         .content(lang.t(Msg::PreviewPost))
-        .add_file(CreateAttachment::bytes(image, "scoreboard.png"))
+        .add_file(CreateAttachment::bytes(image, format!("scoreboard.{}", render::IMAGE_EXT)))
         .allowed_mentions(mentions())).await)?;
     info!(message_id = message.id.get(), "Posted one scoreboard preview; no gateway started");
     Ok(())

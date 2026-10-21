@@ -11,6 +11,7 @@ mod render;
 mod report_card;
 mod riot;
 mod store;
+mod theme;
 mod tracker;
 
 use anyhow::{Result, bail, ensure};
@@ -40,7 +41,7 @@ enum Mode {
     Probe,
     /// Render a recent real match to PNG; --post sends one preview per language without a gateway.
     RenderScoreboard {
-        #[arg(long, default_value = "data/scoreboard.png")]
+        #[arg(long, default_value = "data/scoreboard.webp")]
         output: PathBuf,
         #[arg(long)]
         match_id: Option<String>,
@@ -55,7 +56,7 @@ enum Mode {
     RenderReport {
         #[arg(long, default_value = "weekly")]
         period: String,
-        #[arg(long, default_value = "data/report.png")]
+        #[arg(long, default_value = "data/report.webp")]
         output: PathBuf,
         /// vi, en, or all (one file per language, suffixed -vi/-en). Defaults to the configured language.
         #[arg(long)]
@@ -132,7 +133,7 @@ async fn execute() -> Result<()> {
             Ok(())
         }
         Mode::RenderScoreboard { output, match_id, post, language } => {
-            ensure!(output.extension().and_then(|s| s.to_str()).is_some_and(|s| s.eq_ignore_ascii_case("png")), "Scoreboard output must be a PNG file");
+            ensure!(output.extension().and_then(|s| s.to_str()).is_some_and(|s| s.eq_ignore_ascii_case(render::IMAGE_EXT)), "Scoreboard output must be a WebP file");
             if post { app.cfg.validate_discord(&secrets)?; }
             let game = render::preview_match(&app, match_id.as_deref()).await?;
             let langs = languages(&app, language.as_deref())?;
@@ -141,10 +142,10 @@ async fn execute() -> Result<()> {
             let stem = output.file_stem().and_then(|s| s.to_str()).unwrap_or("scoreboard");
             let path = |lang: Lang| {
                 let suffix = if langs.len() > 1 { format!("-{}", lang.code()) } else { String::new() };
-                directory.join(format!("{stem}{suffix}.png"))
+                directory.join(format!("{stem}{suffix}.{}", render::IMAGE_EXT))
             };
             for &lang in &langs {
-                let image = render::png(&app, game.clone(), lang, true).await?;
+                let image = render::image(&app, game.clone(), lang, true).await?;
                 std::fs::write(path(lang), &image)?;
                 info!(match_id = %game.id, language = lang.code(), "Saved real-match preview images");
                 if post { discord::post_preview(&app, &secrets.discord, image, lang).await?; }
@@ -163,7 +164,7 @@ async fn execute() -> Result<()> {
             let stem = output.file_stem().and_then(|s| s.to_str()).unwrap_or("report");
             for &lang in &langs {
                 let suffix = if langs.len() > 1 { format!("-{}", lang.code()) } else { String::new() };
-                std::fs::write(directory.join(format!("{stem}-{}{suffix}.png", period.key())), report_card::png(&app, report.clone(), lang).await?)?;
+                std::fs::write(directory.join(format!("{stem}-{}{suffix}.{}", period.key(), render::IMAGE_EXT)), report_card::image(&app, report.clone(), lang).await?)?;
                 std::fs::write(directory.join(format!("{stem}-{}{suffix}.txt", period.key())), report.text(lang))?;
                 info!(period = period.key(), language = lang.code(), "Saved report card and text");
             }

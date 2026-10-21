@@ -43,6 +43,15 @@ impl Lang {
             _ => return self.f(Msg::QueueUnknown, &[&id]),
         }.into()
     }
+    /// Longer queue name for image headers.
+    pub fn queue_title(self, id: u16) -> String {
+        let vi = self == Lang::Vi;
+        match id {
+            420 => if vi { "Xếp hạng Đơn/Đôi" } else { "Ranked Solo/Duo" },
+            440 => if vi { "Xếp hạng Linh hoạt" } else { "Ranked Flex" },
+            _ => return self.queue(id),
+        }.into()
+    }
     /// Match-V5 `teamPosition`; empty when unknown.
     pub fn role(self, role: &str) -> &'static str {
         let i = self as usize;
@@ -272,8 +281,9 @@ catalog! {
     BlockClimbed: "TĂNG HẠNG", "CLIMBED";
     BlockDropped: "TỤT HẠNG", "DROPPED";
     BlockUnknown: "CHƯA RÕ LP", "LP UNKNOWN";
-    ImgTotalKills: "Tổng hạ gục", "Total kills";
-    ImgTotalGold: "Tổng vàng", "Total gold";
+    ImgGold: "VÀNG", "GOLD";
+    ImgAvgRank: "HẠNG TRUNG BÌNH", "AVG RANK";
+    ImgPerfectKda: "KDA hoàn hảo", "Perfect KDA";
     ImgDamage: "SÁT THƯƠNG", "DAMAGE";
     ImgTaken: "NHẬN VÀO", "TAKEN";
     ImgVision: "TẦM NHÌN", "VISION";

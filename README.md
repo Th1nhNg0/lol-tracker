@@ -26,9 +26,9 @@ You and your friends grind ranked together, then argue about who carried and who
 
 ## Features
 
-- **Post-game scoreboard** – one image with all ten players in tinted team blocks: KDA with kill participation, damage dealt and taken, vision, CS, items, summoner spells and runes. A strip between the teams compares objectives (dragons, Baron, Herald, towers, inhibitors), total kills and total gold.
-- **LP and rank per game** – Solo/Duo and Flex, with the LP gained or lost beside each tracked player and the rank of all ten players. `MVP` and `WORST` labels sit on the portraits.
-- **Daily, weekly and monthly reports** – players who climbed and players who dropped in two tinted blocks, each with record, KDA, damage, CS, vision and an LP-change bar. Weekly and monthly cards add six honours (kills, deaths, damage, farm, vision, win rate).
+- **Post-game scoreboard** – one image with splash art of the game's best tracked player, the result, the kill score and gold lead, then a table per team: KDA with kill participation, damage dealt and taken, gold, vision, CS, items, summoner spells and runes. Each team header shows its objectives (dragons, Baron, Herald, towers, inhibitors), average rank and total damage. Images are drawn at 2x and sent as lossy WebP, a few hundred KB each.
+- **LP and rank per game** – Solo/Duo and Flex, with the LP gained or lost beside each tracked player and the rank of all ten players. `MVP`, `ACE` and `WORST` labels sit on the portraits.
+- **Daily, weekly and monthly reports** – a splash-art header with the group's LP, then players who climbed and players who dropped in two blocks, each with record, KDA, damage, CS, vision and an LP-change bar. Weekly and monthly cards add six honours (kills, deaths, damage, farm, vision, win rate).
 - **Optional AI commentary** – a short, funny line per tracked player with a title and emoji, written by any OpenAI-compatible model in the voice *you* define in a `prompt.md`. Custom Discord emojis are supported.
 - **Slash commands** – `/lastgame`, `/rank`, `/players` and admin `/config` for channels, roster and on-demand reports.
 - **English and Vietnamese** – messages, images and slash-command descriptions.
@@ -238,11 +238,11 @@ The tracker polls match history for your roster, stores every new game together 
 
 ```sh
 cargo build --locked
-./target/debug/rift-recap --env-file .env render-scoreboard --language all --output data/board.png
-./target/debug/rift-recap --env-file .env render-report --period weekly --language all --output data/report.png
+./target/debug/rift-recap --env-file .env render-scoreboard --language all --output data/board.webp
+./target/debug/rift-recap --env-file .env render-report --period weekly --language all --output data/report.webp
 ```
 
-`render-scoreboard` draws a stored or recent real match to a PNG (add `--post` to send one image to the games channel). `render-report` does the same for a report and prints its text form. Neither imports matches, touches baselines or calls an LLM.
+`render-scoreboard` draws a stored or recent real match to a WebP (add `--post` to send one image to the games channel). `render-report` does the same for a report and prints its text form. Neither imports matches, touches baselines or calls an LLM.
 
 | Path | Role |
 |---|---|

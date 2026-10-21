@@ -15,10 +15,11 @@ const TIERS: [&str; 10] = ["IRON", "BRONZE", "SILVER", "GOLD", "PLATINUM", "EMER
 
 /// Artwork an image needs, keyed by Match-V5 champion names and numeric IDs.
 #[derive(Default)]
-pub struct Wanted { pub champions: BTreeSet<String>, pub items: BTreeSet<i64>, pub objectives: bool, pub spells: BTreeSet<i64>, pub runes: BTreeSet<i64>, pub tiers: BTreeSet<String> }
+pub struct Wanted { pub splash: Option<String>, pub champions: BTreeSet<String>, pub items: BTreeSet<i64>, pub objectives: bool, pub spells: BTreeSet<i64>, pub runes: BTreeSet<i64>, pub tiers: BTreeSet<String> }
 impl Wanted {
     pub fn from_match(game: &Match) -> Self {
         Self {
+            splash: crate::presentation::featured(game).map(|p| p.champion.clone()),
             champions: game.participants.iter().map(|p| p.champion.clone()).collect(),
             items: game.participants.iter().flat_map(|p| p.items.iter().copied()).filter(|id| *id > 0).collect(),
             objectives: !game.objectives.is_empty(),
@@ -53,6 +54,11 @@ impl Assets {
             let Some(champ) = champions["data"].as_object().and_then(|m| m.iter().find(|(id, c)| id.eq_ignore_ascii_case(wanted_name) || c["name"].as_str() == Some(wanted_name)).map(|(_, c)| c)) else { continue; };
             if let Some(name) = champ["name"].as_str() { names.insert(wanted_name.clone(), name.to_owned()); }
             if let Some(file) = champ["image"]["full"].as_str() { jobs.insert(format!("champion:{wanted_name}"), format!("/cdn/{version}/img/champion/{file}")); }
+        }
+        // Wide splash art behind the scoreboard header; the champion's Data Dragon id names the file.
+        if let Some(name) = &wanted.splash
+            && let Some(id) = champions["data"].as_object().and_then(|m| m.iter().find(|(id, c)| id.eq_ignore_ascii_case(name) || c["name"].as_str() == Some(name)).map(|(id, _)| id)) {
+            jobs.insert(format!("splash:{name}"), format!("/cdn/img/champion/splash/{id}_0.jpg"));
         }
         for id in &wanted.items { jobs.insert(format!("item:{id}"), format!("/cdn/{version}/img/item/{id}.png")); }
         if !wanted.spells.is_empty() {

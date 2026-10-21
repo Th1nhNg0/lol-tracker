@@ -24,6 +24,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "tim
 toml = "0.9"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+webp = { version = "0.3.1", default-features = false }
 
 [profile.dev]
 debug = 0

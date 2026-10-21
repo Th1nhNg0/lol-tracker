@@ -132,6 +132,11 @@ pub fn badges(m: &Match) -> Vec<(u64, Badge)> {
     }
     out
 }
+/// The tracked player with the best performance score, whose champion fronts the scoreboard header.
+pub fn featured(m: &Match) -> Option<&Participant> {
+    let scores = scores(m, (m.duration as f64 / 60.0).max(1.0));
+    m.participants.iter().zip(scores).filter(|(p, _)| p.tracked).max_by(|a, b| a.1.total_cmp(&b.1)).map(|(p, _)| p)
+}
 /// Standout and least-impact player of each team containing tracked players (5v5 only).
 pub fn verdict(m: &Match, lang: Lang) -> Option<String> {
     if m.remake || m.participants.len() != 10 { return None; }

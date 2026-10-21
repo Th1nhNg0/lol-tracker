@@ -3,38 +3,14 @@ use crate::{App, i18n::{Lang, Msg}, model::{Match}, presentation::{Badge, plain}
 use anyhow::{Result, ensure};
 use resvg::usvg::fontdb;
 use serde_json::Value;
-use std::{collections::HashSet, fmt::Write, path::Path, sync::{Arc, OnceLock}};
+use std::{collections::HashSet, path::Path, sync::{Arc, OnceLock}};
 
-pub(crate) const TEXT: &str = "#f0f1f7";
 pub(crate) const DIM: &str = "#9ca8bb";
 pub(crate) const GOLD: &str = "#edc976";
-pub(crate) const GREEN: &str = "#6cdbb0";
 pub(crate) const RED: &str = "#fa8297";
-pub(crate) const BLUE: &str = "#72b8fa";
 
 pub(crate) struct Canvas { pub svg: String, pub clips: usize }
-impl Canvas {
-    pub fn rect(&mut self, x: u32, y: u32, w: u32, h: u32, r: u32, fill: &str) {
-        let _ = write!(self.svg, "<rect x='{x}' y='{y}' width='{w}' height='{h}' rx='{r}' fill='{fill}'/>");
-    }
-    pub fn outline(&mut self, x: u32, y: u32, w: u32, h: u32, r: u32, color: &str) {
-        let _ = write!(self.svg, "<rect x='{x}' y='{y}' width='{w}' height='{h}' rx='{r}' fill='none' stroke='{color}' stroke-width='1.5'/>");
-    }
-    pub fn text(&mut self, x: u32, y: u32, size: u32, fill: &str, weight: u16, anchor: &str, text: &str) {
-        let _ = write!(self.svg, "<text x='{x}' y='{y}' font-size='{size}' fill='{fill}' font-weight='{weight}' text-anchor='{anchor}'>{}</text>", escape(text));
-    }
-    /// One line of text in two colours, for example a rank name followed by its dimmer details.
-    pub fn two_tone(&mut self, x: u32, y: u32, size: u32, first: (&str, u16, &str), second: (&str, &str)) {
-        let _ = write!(self.svg, "<text x='{x}' y='{y}' font-size='{size}'><tspan fill='{}' font-weight='{}'>{}</tspan><tspan fill='{}' font-weight='400'>{}</tspan></text>", first.0, first.1, escape(first.2), second.0, escape(second.1));
-    }
-    pub fn image(&mut self, data: Option<&str>, x: u32, y: u32, w: u32, h: u32, radius: u32) {
-        let Some(data) = data else { self.rect(x, y, w, h, radius, "#27364b"); return; };
-        self.clips += 1;
-        let id = self.clips;
-        let _ = write!(self.svg, "<defs><clipPath id='c{id}'><rect x='{x}' y='{y}' width='{w}' height='{h}' rx='{radius}'/></clipPath></defs><image href='{data}' x='{x}' y='{y}' width='{w}' height='{h}' preserveAspectRatio='xMidYMid slice' clip-path='url(#c{id})'/>");
-    }
-}
-fn escape(text: &str) -> String {
+pub(crate) fn escape(text: &str) -> String {
     text.chars().filter(|c| !c.is_control()).map(|c| match c {
         '&' => "&amp;".into(), '<' => "&lt;".into(), '>' => "&gt;".into(), '\'' => "&apos;".into(), '"' => "&quot;".into(), _ => c.to_string(),
     }).collect()
@@ -47,7 +23,6 @@ pub(crate) fn number(value: i64) -> String {
     let digits = value.to_string();
     digits.chars().rev().enumerate().flat_map(|(i, c)| if i > 0 && i % 3 == 0 { vec![',', c] } else { vec![c] }).collect::<Vec<_>>().into_iter().rev().collect()
 }
-pub(crate) fn color(team: u16) -> &'static str { if team == 100 { BLUE } else { RED } }
 pub(crate) fn team_name(team: u16, lang: Lang) -> String { lang.team(team).to_uppercase() }
 
 pub(crate) fn tier_color(tier: &str) -> &'static str {
@@ -69,12 +44,20 @@ fn fonts() -> Arc<fontdb::Database> {
         Arc::new(db)
     }).clone()
 }
+/// Images are laid out on a 1200 px grid and drawn at twice that size.
+pub(crate) const SCALE: f32 = 2.0;
+/// Lossy WebP quality: text and icons stay crisp and a full scoreboard is a few hundred KB.
+const WEBP_QUALITY: f32 = 90.0;
+pub(crate) const IMAGE_EXT: &str = "webp";
+/// Draws the SVG, laid out on a `width` x `height` grid, at `SCALE` and encodes it as WebP.
 pub(crate) fn rasterize(svg: &str, width: u32, height: u32) -> Result<Vec<u8>> {
     let options = resvg::usvg::Options { font_family: "Be Vietnam Pro".into(), fontdb: fonts(), ..Default::default() };
     let tree = resvg::usvg::Tree::from_str(svg, &options).map_err(|_| anyhow::anyhow!("Cannot parse image SVG"))?;
-    let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height).ok_or_else(|| anyhow::anyhow!("Cannot allocate image"))?;
-    resvg::render(&tree, resvg::tiny_skia::Transform::identity(), &mut pixmap.as_mut());
-    pixmap.encode_png().map_err(|_| anyhow::anyhow!("Cannot encode PNG"))
+    let (w, h) = ((width as f32 * SCALE) as u32, (height as f32 * SCALE) as u32);
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(w, h).ok_or_else(|| anyhow::anyhow!("Cannot allocate image"))?;
+    resvg::render(&tree, resvg::tiny_skia::Transform::from_scale(SCALE, SCALE), &mut pixmap.as_mut());
+    // Every image starts with an opaque background rectangle, so premultiplied and straight alpha agree.
+    Ok(webp::Encoder::from_rgba(pixmap.data(), w, h).encode(WEBP_QUALITY).to_vec())
 }
 pub async fn blocking(work: impl FnOnce() -> Result<Vec<u8>> + Send + 'static) -> Result<Vec<u8>> {
     tokio::task::spawn_blocking(work).await.map_err(|_| anyhow::anyhow!("Image worker failed"))?
@@ -90,7 +73,7 @@ pub(crate) fn badge_style(badge: Badge, lang: Lang) -> (&'static str, &'static s
         Badge::Worst => (lang.t(Msg::ImgWorst), RED, "#3d1d26"),
     }
 }
-pub async fn png(app: &App, game: Match, lang: Lang, preview: bool) -> Result<Vec<u8>> {
+pub async fn image(app: &App, game: Match, lang: Lang, preview: bool) -> Result<Vec<u8>> {
     let directory = app.cfg.database.parent().unwrap_or(Path::new(".")).join("artwork");
     let art = Assets::load(Wanted::from_match(&game), directory).await;
     let timezone = app.cfg.reports.timezone.clone();
