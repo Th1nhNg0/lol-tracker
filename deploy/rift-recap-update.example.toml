@@ -1,0 +1,27 @@
+# Settings for deploy/rift-recap-update. Install as /etc/rift-recap/update.toml (or pass --config).
+# Nothing in the repository is specific to one server: everything below is yours to set.
+
+repo = "owner/rift-recap"                # GitHub repository whose releases are installed
+service = "rift-recap.service"           # systemd unit running the bot
+install_dir = "/opt/rift-recap"          # holds the binary, config.toml, .env, players.json, data/
+
+# Optional (defaults shown).
+# binary = "rift-recap"                  # file name inside install_dir
+# config = "config.toml"
+# env_file = ".env"
+# backup_dir = "/var/backups/rift-recap" # restore-tested database snapshots and the previous binary
+# scratch_dir = "/var/tmp"               # pre-flight copies of the config and database go here
+# asset = "rift-recap-x86_64-linux-musl" # release asset to install
+# keep_database_backups = 10
+# keep_binary_backups = 5
+# health_timeout_secs = 30               # how long the restarted service gets to settle before rollback
+
+# Also require a GitHub build-provenance attestation (needs the `gh` CLI). Proves the binary was
+# built by this repository's release workflow, not just uploaded by someone with write access.
+# require_attestation = true
+
+# Run after every update, with the message on stdin. Any command works, for example a chat bot's CLI:
+# notify_command = ["/usr/local/bin/send-to-discord", "--quiet"]
+
+# Use sudo if the updater does not run as the user that controls the service.
+# systemctl = ["sudo", "systemctl"]

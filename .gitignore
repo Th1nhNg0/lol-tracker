@@ -13,3 +13,4 @@
 *.log
 *.pem
 *.key
+__pycache__/
