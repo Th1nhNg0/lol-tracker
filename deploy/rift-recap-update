@@ -312,7 +312,7 @@ def candidate_check(settings: Settings, candidate: Path, database: Path) -> str:
             text = set_top_level(text, "prompt_file", str(path if path.is_absolute() else settings.config.parent / path), only_if_present=True)
         (temp / "config.toml").write_text(text, encoding="utf-8")
         (temp / ".env").write_text(DUMMY_ENV, encoding="utf-8")
-        result = run([str(candidate), "--config", str(temp / "config.toml"), "--env-file", str(temp / ".env"), "check"], timeout=60, check=False)
+        result = run([str(candidate), "--config", str(temp / "config.toml"), "--env-file", str(temp / ".env"), "check"], timeout=60, check=False, env={**os.environ, "NO_COLOR": "1"})
         if result.returncode != 0:
             raise RuntimeError(f"candidate config/storage check failed (exit {result.returncode})")
         return result.stdout.strip()
