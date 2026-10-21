@@ -114,7 +114,7 @@ fn reasons(p: &Participant, team: &[&Participant], minutes: f64, good: bool, lan
 }
 /// Participant IDs of each team's standout player by the same score as `verdict` (5v5 only).
 #[derive(Clone, Copy, PartialEq)]
-pub enum Badge { Mvp, Worst }
+pub enum Badge { Mvp, Ace, Worst }
 /// Scoreboard badges (5v5 only), from the same score as the text verdict: each team's best player
 /// (MVP on a win, ACE on a loss) and the lowest-scoring player of each team with tracked players.
 pub fn badges(m: &Match) -> Vec<(u64, Badge)> {
@@ -127,7 +127,7 @@ pub fn badges(m: &Match) -> Vec<(u64, Badge)> {
         let mut rows: Vec<(&Participant, f64)> = m.participants.iter().zip(&scores).filter(|(p, _)| p.team == team).map(|(p, s)| (p, *s)).collect();
         rows.sort_by(|a, b| a.1.total_cmp(&b.1));
         let (Some(&(worst, _)), Some(&(best, _))) = (rows.first(), rows.last()) else { continue };
-        if best.win { out.push((best.id, Badge::Mvp)); }
+        out.push((best.id, if best.win { Badge::Mvp } else { Badge::Ace }));
         if rows.len() > 1 && rows.iter().any(|(p, _)| p.tracked) { out.push((worst.id, Badge::Worst)); }
     }
     out

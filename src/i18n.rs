@@ -262,6 +262,7 @@ catalog! {
     ImgPreview: "XEM TRƯỚC · TRẬN THẬT", "PREVIEW · REAL MATCH";
     PreviewPost: "**Xem trước bảng điểm từ một trận đấu thật.** Không khởi động gateway hay LLM.", "**Scoreboard preview from a real match.** No gateway session or LLM was started.";
     ImgMvp: "MVP", "MVP";
+    ImgAce: "ACE", "ACE";
     ImgWorst: "CHƠI TỆ", "WORST";
     ColRecord: "TRẬN", "RECORD";
     ColDamageGame: "SÁT THƯƠNG / TRẬN", "DAMAGE / GAME";
