@@ -48,16 +48,16 @@ jobs:
           docker build --target build --tag rift-recap-build .
           id=$(docker create rift-recap-build)
           mkdir dist
-          docker cp "${id}:/src/target/release/rift-recap" dist/rift-recap-x86_64-linux-musl
+          docker cp "${id}:/src/target/release/rift-recap" dist/rift-recap-linux-x86_64
           docker rm "${id}" >/dev/null
-          (cd dist && sha256sum rift-recap-x86_64-linux-musl > SHA256SUMS && cat SHA256SUMS)
+          (cd dist && sha256sum rift-recap-linux-x86_64 > SHA256SUMS && cat SHA256SUMS)
 
       - name: Binary must report the tag
         run: |
           set -euo pipefail
-          chmod +x dist/rift-recap-x86_64-linux-musl
-          test "$(dist/rift-recap-x86_64-linux-musl --version)" = "rift-recap ${GITHUB_REF_NAME#v}"
-          file dist/rift-recap-x86_64-linux-musl | grep -q 'statically linked\|static-pie'
+          chmod +x dist/rift-recap-linux-x86_64
+          test "$(dist/rift-recap-linux-x86_64 --version)" = "rift-recap ${GITHUB_REF_NAME#v}"
+          file dist/rift-recap-linux-x86_64 | grep -q 'statically linked\|static-pie'
 
       - name: Save release files
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -85,7 +85,7 @@ jobs:
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: dist/rift-recap-x86_64-linux-musl
+          subject-path: dist/rift-recap-linux-x86_64
 
       - name: Publish release
         env:
@@ -93,5 +93,5 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          gh release create "${GITHUB_REF_NAME}" dist/rift-recap-x86_64-linux-musl dist/SHA256SUMS \
+          gh release create "${GITHUB_REF_NAME}" dist/rift-recap-linux-x86_64 dist/SHA256SUMS \
             --verify-tag --generate-notes --title "${GITHUB_REF_NAME}"

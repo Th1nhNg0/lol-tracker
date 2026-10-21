@@ -120,7 +120,7 @@ class UpdaterTest(unittest.TestCase):
         shutil.rmtree(cls.dir, ignore_errors=True)
 
     def publish(self, tag, binary, checksum=None, latest=True, prerelease=False):
-        asset = "rift-recap-x86_64-linux-musl"
+        asset = "rift-recap-linux-x86_64"
         data = self.bins[binary]
         prefix = f"/o/r/releases/download/{tag}"
         info = {"tag_name": tag, "draft": False, "prerelease": prerelease, "html_url": f"{self.base}/{tag}", "assets": [

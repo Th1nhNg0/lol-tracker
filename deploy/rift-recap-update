@@ -70,7 +70,7 @@ class Settings:
         self.lock = self.install_dir / ".update.lock"
         self.backup_root = Path(raw.get("backup_dir", "/var/backups/rift-recap"))
         self.scratch = Path(raw.get("scratch_dir", tempfile.gettempdir()))
-        self.asset: str = raw.get("asset", "rift-recap-x86_64-linux-musl")
+        self.asset: str = raw.get("asset", "rift-recap-linux-x86_64")
         self.require_attestation: bool = raw.get("require_attestation", False)
         self.notify_command: list[str] = raw.get("notify_command", [])
         self.systemctl: list[str] = raw.get("systemctl", ["systemctl"])

@@ -17,7 +17,7 @@ rift-recap-update  →  verify checksum → pre-flight → back up → swap bina
 
 1. Set `version` in `Cargo.toml` (and `Cargo.lock`) to the new version and merge it.
 2. Push a matching tag, `vMAJOR.MINOR.PATCH`. The workflow refuses a tag that differs from `Cargo.toml`.
-3. The release holds `rift-recap-x86_64-linux-musl` (a static binary that runs on any x86_64 Linux),
+3. The release holds `rift-recap-linux-x86_64` (a static binary that runs on any x86_64 Linux),
    `SHA256SUMS`, and an attestation proving the binary was built by that workflow.
 
 ## Installing the updater on a server
