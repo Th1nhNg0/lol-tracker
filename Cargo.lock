@@ -1397,6 +1397,7 @@ dependencies = [
  "chrono-tz",
  "clap",
  "dotenvy",
+ "libwebp-sys",
  "png",
  "reqwest",
  "resvg",

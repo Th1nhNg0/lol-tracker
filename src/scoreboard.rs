@@ -72,7 +72,7 @@ pub fn scoreboard(game: &Match, lang: Lang, timezone: &str, preview: bool, art: 
     }
     cv.stroke(1.0, 1.0, W as f32 - 2.0, height - 2.0, 0.0, GOLD_DIM, 2.0, 1.0);
     cv.svg.push_str("</g></svg>");
-    rasterize(&cv.svg, W, height.ceil() as u32)
+    rasterize(cv.svg, W, height.ceil() as u32)
 }
 
 /// Splash art of the featured champion with the result, date, gold lead and kill score over it.
@@ -87,7 +87,9 @@ fn header(cv: &mut Canvas, game: &Match, teams: &[Team], lang: Lang, timezone: &
     cv.block(0.0, 0.0, W as f32, HERO, 0.0, &backdrop, "");
     let splash = presentation::featured(game).and_then(|p| art.image(&format!("splash:{}", p.champion)));
     if let Some(data) = splash {
-        let _ = write!(cv.svg, "<defs><clipPath id='hero'><rect width='{W}' height='{HERO}'/></clipPath></defs><image href='{data}' x='0' y='-120' width='{W}' height='708' preserveAspectRatio='xMidYMin slice' clip-path='url(#hero)'/>");
+        // A viewport-sized pattern clips while drawing, avoiding full splash-
+        // sized intermediate layers and masks for the small visible header.
+        let _ = write!(cv.svg, "<defs><pattern id='hero' patternUnits='userSpaceOnUse' width='{W}' height='{HERO}'><image href='{data}' x='0' y='-120' width='{W}' height='708' preserveAspectRatio='xMidYMin slice'/></pattern></defs><rect width='{W}' height='{HERO}' fill='url(#hero)'/>");
     }
     let sides = cv.gradient(&[(0.0, BG, 0.92), (0.3, BG, 0.62), (0.48, BG, 0.0), (0.8, BG, 0.0), (1.0, BG, 0.72)], (0.0, 0.0, 1.0, 0.0));
     cv.block(0.0, 0.0, W as f32, HERO, 0.0, &sides, "");

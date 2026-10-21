@@ -108,7 +108,7 @@ pub fn card(report: &Report, lang: Lang, art: &Assets) -> Result<Vec<u8>> {
     }
     cv.stroke(1.0, 1.0, W as f32 - 2.0, height - 2.0, 0.0, GOLD_DIM, 2.0, 1.0);
     cv.svg.push_str("</g></svg>");
-    rasterize(&cv.svg, W, height.ceil() as u32)
+    rasterize(cv.svg, W, height.ceil() as u32)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -157,7 +157,9 @@ fn header(cv: &mut Canvas, report: &Report, lang: Lang, art: &Assets) {
     let backdrop = cv.gradient(&[(0.0, "#0f2a3a", 1.0), (1.0, "#142b3a", 1.0)], (0.0, 0.0, 1.0, 1.0));
     cv.block(0.0, 0.0, W as f32, HERO, 0.0, &backdrop, "");
     if let Some(data) = featured(report).and_then(top_champion).and_then(|c| art.image(&format!("splash:{c}"))) {
-        let _ = write!(cv.svg, "<defs><clipPath id='hero'><rect width='{W}' height='{HERO}'/></clipPath></defs><image href='{data}' x='0' y='-170' width='{W}' height='708' preserveAspectRatio='xMidYMin slice' clip-path='url(#hero)'/>");
+        // Render only the visible header-sized pattern rather than creating a
+        // full splash-sized isolation layer and clip mask.
+        let _ = write!(cv.svg, "<defs><pattern id='hero' patternUnits='userSpaceOnUse' width='{W}' height='{HERO}'><image href='{data}' x='0' y='-170' width='{W}' height='708' preserveAspectRatio='xMidYMin slice'/></pattern></defs><rect width='{W}' height='{HERO}' fill='url(#hero)'/>");
     }
     let sides = cv.gradient(&[(0.0, BG, 0.92), (0.34, BG, 0.62), (0.52, BG, 0.0), (0.8, BG, 0.0), (1.0, BG, 0.72)], (0.0, 0.0, 1.0, 0.0));
     cv.block(0.0, 0.0, W as f32, HERO, 0.0, &sides, "");

@@ -26,6 +26,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
 webp = { version = "0.3.1", default-features = false }
 
+# Use the native lossy entry point without the wrapper's full-size ARGB copy.
+libwebp-sys = "0.9.6"
 [profile.dev]
 debug = 0
 

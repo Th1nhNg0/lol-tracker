@@ -8,6 +8,8 @@ mod reports;
 mod render_assets;
 #[cfg(test)]
 mod render_tests;
+#[cfg(test)]
+mod report_tests;
 mod scoreboard;
 mod render;
 mod report_card;
@@ -15,6 +17,7 @@ mod riot;
 mod store;
 mod theme;
 mod tracker;
+mod webp_encode;
 
 use anyhow::{Result, bail, ensure};
 use clap::{Parser, Subcommand};

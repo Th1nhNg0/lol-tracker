@@ -145,6 +145,19 @@ impl Store {
         let mut q = db.prepare("SELECT data FROM matches WHERE ended_at>? AND ended_at<=? ORDER BY ended_at")?;
         q.query_map(params![start, end], |r| r.get::<_, String>(0))?.map(|s| decode(&s?)).collect()
     }
+    /// Visit normalized matches in the same order as `matches`, retaining only
+    /// one decoded row. The callback must not re-enter this store: its database
+    /// mutex is held until the scan returns.
+    pub fn visit_matches(&self, start: i64, end: i64, mut visit: impl FnMut(&Match)) -> Result<()> {
+        let db = self.db()?;
+        let mut q = db.prepare("SELECT data FROM matches WHERE ended_at>? AND ended_at<=? ORDER BY ended_at")?;
+        let rows = q.query_map(params![start, end], |r| r.get::<_, String>(0))?;
+        for row in rows {
+            let game: Match = decode(&row?)?;
+            visit(&game);
+        }
+        Ok(())
+    }
     pub fn queue_report(&self, key: &str, notice: &Notice) -> Result<()> {
         self.db()?.execute("INSERT OR IGNORE INTO outbox(unique_key,at,data) VALUES(?,?,?)", params![key, now(), encode(notice)?])?;
         Ok(())
@@ -257,6 +270,19 @@ mod tests {
         store.commentary_done(&game.id, Some("commentary"))?;
         assert!(store.next_commentary()?.is_none());
         assert_eq!(store.recent_commentary("different-game", 6)?, ["commentary"]);
+        Ok(())
+    }
+
+    #[test]
+    fn failed_match_scan_releases_database_lock() -> Result<()> {
+        let store = Store::open(Path::new(":memory:"))?;
+        store.db()?.execute("INSERT INTO matches(id,ended_at,data) VALUES('broken',10,'not-json')", [])?;
+        assert!(store.visit_matches(0, 20, |_| panic!("invalid row must not reach callback")).is_err());
+        store.set("after_scan", "available")?;
+        assert_eq!(store.setting("after_scan")?.as_deref(), Some("available"));
+        let mut count = 0;
+        store.visit_matches(10, 20, |_| count += 1)?;
+        assert_eq!(count, 0);
         Ok(())
     }
 }

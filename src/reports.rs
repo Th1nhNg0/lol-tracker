@@ -154,9 +154,11 @@ impl Report {
 
 /// Report for the window ending now, from stored matches.
 pub fn build(app: &App, period: Period) -> Result<Option<Report>> {
-    let end = now();
+    build_at(app, period, now())
+}
+pub(crate) fn build_at(app: &App, period: Period, end: i64) -> Result<Option<Report>> {
     let start = period.start(end, app.cfg.reports.timezone.parse()?);
-    compute(app, period, start, end, &app.store.matches(start, end)?)
+    compute_scanned(app, period, start, end, |visit| app.store.visit_matches(start, end, visit))
 }
 pub fn window(app: &App, period: Period) -> Result<(i64, i64)> {
     let end = now();
@@ -164,15 +166,25 @@ pub fn window(app: &App, period: Period) -> Result<(i64, i64)> {
 }
 /// Aggregates the supplied matches; ranks and roster come from the store.
 pub fn compute(app: &App, period: Period, start: i64, end: i64, matches: &[Match]) -> Result<Option<Report>> {
+    compute_scanned(app, period, start, end, |visit| {
+        for game in matches { visit(game); }
+        Ok(())
+    })
+}
+// Aggregate during the scan, then enrich ranks only after the scan has returned
+// and released its database statement and mutex. Stored reports and previews
+// share the exact same accumulator and ordering.
+fn compute_scanned(app: &App, period: Period, start: i64, end: i64, scan: impl FnOnce(&mut dyn FnMut(&Match)) -> Result<()>) -> Result<Option<Report>> {
     let roster = app.store.players()?;
     let current: HashSet<&str> = roster.iter().map(|p| p.puuid.as_str()).filter(|p| !p.is_empty()).collect();
     let mut stats: BTreeMap<String, PlayerLine> = BTreeMap::new();
     let mut champions: BTreeMap<String, BTreeMap<String, i64>> = BTreeMap::new();
     let mut records: BTreeMap<(String, u16), (i64, i64)> = BTreeMap::new();
     let mut games = 0;
-    for m in matches.iter().filter(|m| !m.remake && m.ended_at > start && m.ended_at <= end) {
+    scan(&mut |m| {
+        if m.remake || m.ended_at <= start || m.ended_at > end { return; }
         let tracked: Vec<_> = m.participants.iter().filter(|p| p.tracked && current.contains(p.puuid.as_str())).collect();
-        if tracked.is_empty() { continue; }
+        if tracked.is_empty() { return; }
         games += 1;
         for p in &tracked {
             let a = stats.entry(p.puuid.clone()).or_default();
@@ -186,7 +198,7 @@ pub fn compute(app: &App, period: Period, start: i64, end: i64, matches: &[Match
                 let row = records.entry((p.puuid.clone(), m.queue)).or_default(); row.0 += 1; row.1 += i64::from(p.win);
             }
         }
-    }
+    })?;
     if games == 0 { return Ok(None); }
     let mut partial = false;
     for ((puuid, queue), (count, wins)) in records {

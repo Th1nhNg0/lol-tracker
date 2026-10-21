@@ -39,8 +39,10 @@ fn fonts() -> Arc<fontdb::Database> {
     FONTS.get_or_init(|| {
         let mut db = fontdb::Database::new();
         db.load_system_fonts();
-        db.load_font_data(include_bytes!("../assets/fonts/BeVietnamPro-Regular.ttf").to_vec());
-        db.load_font_data(include_bytes!("../assets/fonts/BeVietnamPro-Bold.ttf").to_vec());
+        // The embedded bytes already have static storage; don't duplicate the
+        // complete fonts into long-lived heap buffers.
+        db.load_font_source(fontdb::Source::Binary(Arc::new(&include_bytes!("../assets/fonts/BeVietnamPro-Regular.ttf")[..])));
+        db.load_font_source(fontdb::Source::Binary(Arc::new(&include_bytes!("../assets/fonts/BeVietnamPro-Bold.ttf")[..])));
         Arc::new(db)
     }).clone()
 }
@@ -50,17 +52,37 @@ pub(crate) const SCALE: f32 = 2.0;
 const WEBP_QUALITY: f32 = 90.0;
 pub(crate) const IMAGE_EXT: &str = "webp";
 /// Draws the SVG, laid out on a `width` x `height` grid, at `SCALE` and encodes it as WebP.
-pub(crate) fn rasterize(svg: &str, width: u32, height: u32) -> Result<Vec<u8>> {
+pub(crate) fn rasterize(svg: String, width: u32, height: u32) -> Result<Vec<u8>> {
     let options = resvg::usvg::Options { font_family: "Be Vietnam Pro".into(), fontdb: fonts(), ..Default::default() };
-    let tree = resvg::usvg::Tree::from_str(svg, &options).map_err(|_| anyhow::anyhow!("Cannot parse image SVG"))?;
+    let tree = resvg::usvg::Tree::from_str(&svg, &options).map_err(|_| anyhow::anyhow!("Cannot parse image SVG"))?;
+    // The parsed tree owns its image data; release the XML/base64 copy before
+    // allocating the framebuffer and render/encoder working memory.
+    drop(svg);
     let (w, h) = ((width as f32 * SCALE) as u32, (height as f32 * SCALE) as u32);
     let mut pixmap = resvg::tiny_skia::Pixmap::new(w, h).ok_or_else(|| anyhow::anyhow!("Cannot allocate image"))?;
     resvg::render(&tree, resvg::tiny_skia::Transform::from_scale(SCALE, SCALE), &mut pixmap.as_mut());
     // Every image starts with an opaque background rectangle, so premultiplied and straight alpha agree.
-    Ok(webp::Encoder::from_rgba(pixmap.data(), w, h).encode(WEBP_QUALITY).to_vec())
+    crate::webp_encode::rgba(pixmap.take(), w, h, WEBP_QUALITY)
+}
+// A delivery and two slash commands can otherwise allocate several full-size
+// framebuffers at once. Queue only the CPU-heavy stage, keeping HTTP/gateway
+// futures responsive and completing every admitted job without dropping work.
+struct RenderWorkers { slots: Arc<tokio::sync::Semaphore> }
+impl RenderWorkers {
+    fn new(limit: usize) -> Self { Self { slots: Arc::new(tokio::sync::Semaphore::new(limit)) } }
+    async fn run(&self, work: impl FnOnce() -> Result<Vec<u8>> + Send + 'static) -> Result<Vec<u8>> {
+        let permit = self.slots.clone().acquire_owned().await.map_err(|_| anyhow::anyhow!("Image workers stopped"))?;
+        tokio::task::spawn_blocking(move || {
+            // A canceled async waiter cannot cancel already-running native work.
+            // Keep admission owned by the closure until it actually finishes.
+            let _permit = permit;
+            work()
+        }).await.map_err(|_| anyhow::anyhow!("Image worker failed"))?
+    }
 }
 pub async fn blocking(work: impl FnOnce() -> Result<Vec<u8>> + Send + 'static) -> Result<Vec<u8>> {
-    tokio::task::spawn_blocking(work).await.map_err(|_| anyhow::anyhow!("Image worker failed"))?
+    static WORKERS: OnceLock<RenderWorkers> = OnceLock::new();
+    WORKERS.get_or_init(|| RenderWorkers::new(1)).run(work).await
 }
 
 /// Approximate advance width for laying out inline chips (Be Vietnam Pro averages ~0.6em).
@@ -145,4 +167,105 @@ pub async fn preview_matches(app: &App, start: i64, limit: usize) -> Result<Vec<
         }
     }
     Ok(matches)
+}
+
+#[cfg(test)]
+mod worker_tests {
+    use super::*;
+    use std::{future::{Future, poll_fn}, sync::atomic::{AtomicBool, AtomicUsize, Ordering}, task::Poll, time::Duration};
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn bounds_heavy_work_and_completes_every_job() {
+        let workers = Arc::new(RenderWorkers::new(1));
+        let active = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let mut tasks = tokio::task::JoinSet::new();
+        for id in 0..6u8 {
+            let (workers, active, peak) = (workers.clone(), active.clone(), peak.clone());
+            tasks.spawn(async move { workers.run(move || {
+                let now = active.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(now, Ordering::SeqCst);
+                std::thread::sleep(Duration::from_millis(10));
+                active.fetch_sub(1, Ordering::SeqCst);
+                Ok(vec![id])
+            }).await.unwrap() });
+        }
+        let mut completed = Vec::new();
+        while let Some(result) = tasks.join_next().await { completed.push(result.unwrap()[0]); }
+        completed.sort_unstable();
+        assert_eq!(completed, [0, 1, 2, 3, 4, 5]);
+        assert_eq!(peak.load(Ordering::SeqCst), 1);
+        assert_eq!(active.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancelled_waiter_does_not_release_running_native_work() {
+        let workers = Arc::new(RenderWorkers::new(1));
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let first_workers = workers.clone();
+        let first = tokio::spawn(async move { first_workers.run(move || {
+            let _ = started.send(());
+            released.recv().unwrap();
+            Ok(vec![1])
+        }).await });
+        ready.await.unwrap();
+        first.abort();
+        assert!(first.await.unwrap_err().is_cancelled());
+        assert_eq!(workers.slots.available_permits(), 0);
+        let second_workers = workers.clone();
+        let second = tokio::spawn(async move { second_workers.run(|| Ok(vec![2])).await });
+        tokio::task::yield_now().await;
+        assert!(!second.is_finished());
+        release.send(()).unwrap();
+        assert_eq!(tokio::time::timeout(Duration::from_secs(10), second).await.unwrap().unwrap().unwrap(), [2]);
+        assert_eq!(workers.slots.available_permits(), 1);
+    }
+
+    #[tokio::test]
+    async fn cancelled_queued_work_does_not_run_or_lose_capacity() {
+        let workers = Arc::new(RenderWorkers::new(1));
+        let held = workers.slots.clone().acquire_owned().await.unwrap();
+        let ran = Arc::new(AtomicBool::new(false));
+        let (waiting_workers, flag) = (workers.clone(), ran.clone());
+        let waiting = tokio::spawn(async move { waiting_workers.run(move || {
+            flag.store(true, Ordering::SeqCst);
+            Ok(vec![])
+        }).await });
+        tokio::task::yield_now().await;
+        waiting.abort();
+        assert!(waiting.await.unwrap_err().is_cancelled());
+        drop(held);
+        assert!(!ran.load(Ordering::SeqCst));
+        assert_eq!(workers.run(|| Ok(vec![3])).await.unwrap(), [3]);
+        assert_eq!(workers.slots.available_permits(), 1);
+    }
+
+    #[tokio::test]
+    async fn admission_is_fifo_and_errors_and_panics_release_capacity() {
+        let workers = RenderWorkers::new(1);
+        let held = workers.slots.clone().acquire_owned().await.unwrap();
+        let order = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut queued = Vec::new();
+        for id in 0..4u8 {
+            let order = order.clone();
+            let mut job = Box::pin(workers.run(move || {
+                order.lock().unwrap().push(id);
+                Ok(vec![id])
+            }));
+            // Poll exactly once while capacity is held, fixing admission order
+            // without relying on nondeterministic async task scheduling.
+            poll_fn(|cx| { assert!(job.as_mut().poll(cx).is_pending()); Poll::Ready(()) }).await;
+            queued.push(job);
+        }
+        drop(held);
+        tokio::time::timeout(Duration::from_secs(10), async {
+            for job in queued { job.await.unwrap(); }
+        }).await.unwrap();
+        assert_eq!(*order.lock().unwrap(), [0, 1, 2, 3]);
+        assert!(workers.run(|| anyhow::bail!("expected worker error")).await.is_err());
+        assert!(workers.run(|| panic!("expected worker panic")).await.is_err());
+        assert_eq!(workers.run(|| Ok(vec![4])).await.unwrap(), [4]);
+        assert_eq!(workers.slots.available_permits(), 1);
+    }
 }
