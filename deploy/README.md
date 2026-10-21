@@ -4,7 +4,7 @@ Servers **pull** releases; nothing in this repository logs in to a server and no
 lives on GitHub.
 
 ```
-git tag v0.2.0 && git push origin v0.2.0
+git tag v0.3.0 && git push origin v0.3.0
         │
         ▼  .github/workflows/release.yml
 test → static musl build → SHA256SUMS → build-provenance attestation → GitHub Release

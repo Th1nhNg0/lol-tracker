@@ -218,6 +218,7 @@ catalog! {
     CmdLastgame: "Xem trận gần nhất", "Most recent tracked match";
     CmdRank: "Hạng hiện tại của mọi người", "Current ranks of tracked players";
     CmdPlayers: "Danh sách người chơi đang theo dõi", "Tracked player roster";
+    CmdVersion: "Xem phiên bản bot", "Show bot version";
     CmdConfig: "Cài đặt bot", "Bot settings";
     CmdChannel: "Đặt kênh đăng trận đấu", "Set the game channel";
     CmdRankchannel: "Bật/tắt hoặc đổi kênh báo cáo hạng", "Enable/disable or redirect rank reports";

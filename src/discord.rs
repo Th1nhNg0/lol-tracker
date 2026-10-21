@@ -51,7 +51,7 @@ impl EventHandler for Handler {
                     return;
                 }
                 // Results and ranks are meant for the group (as in the original bot); settings stay private.
-                let public = matches!(cmd.data.name.as_str(), "lastgame" | "rank");
+                let public = matches!(cmd.data.name.as_str(), "lastgame" | "rank" | "version");
                 let deferred = if public { cmd.defer(&ctx.http).await } else { cmd.defer_ephemeral(&ctx.http).await };
                 if deferred.is_err() { return; }
                 let Ok(_slot) = self.slots.try_acquire() else {
@@ -120,6 +120,7 @@ impl Handler {
                 let lines: Vec<String> = players.iter().enumerate().map(|(i, p)| format!("{}. {} · {}", i + 1, view::plain(p.name()), view::plain(&p.riot_id()))).collect();
                 Ok(Reply::text(format!("{}\n{}", lang.f(Msg::RosterTitle, &[&players.len()]), lines.join("\n"))))
             }
+            "version" => Ok(Reply::text(format!("rift-recap v{}", env!("CARGO_PKG_VERSION")))),
             "rank" => {
                 let mut lines = Vec::new();
                 for player in self.app.store.players()? {
@@ -277,7 +278,7 @@ pub async fn register(http: &Http, guild: u64) -> Result<()> {
         .add_option(option(SubCommand, "addplayer", Msg::CmdAddplayer).add_sub_option(riot_id()).add_sub_option(option(Text, "nickname", Msg::OptNickname).max_length(64)))
         .add_option(option(SubCommand, "removeplayer", Msg::CmdRemoveplayer).add_sub_option(riot_id().set_autocomplete(true)))
         .add_option(option(SubCommand, "rankreport", Msg::CmdRankreport).add_sub_option(period));
-    for command in [command("lastgame", Msg::CmdLastgame), command("rank", Msg::CmdRank), command("players", Msg::CmdPlayers), config] {
+    for command in [command("lastgame", Msg::CmdLastgame), command("rank", Msg::CmdRank), command("players", Msg::CmdPlayers), command("version", Msg::CmdVersion), config] {
         safe_http(GuildId::new(guild).create_command(http, command).await)?;
     }
     info!("Guild tracker commands installed; unrelated commands were not cleared");
@@ -376,4 +377,32 @@ pub async fn probe(token: &str) -> Result<()> {
     safe_http(Http::new(token).get_current_user().await)?;
     info!("Discord credentials accepted (read-only probe)");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn version_command_definition_and_reply() {
+        let cmd = command("version", Msg::CmdVersion);
+        let value = serde_json::to_value(&cmd).unwrap();
+        assert_eq!(value["name"], "version");
+        assert_eq!(value["description"], "Show bot version");
+        assert_eq!(value["description_localizations"]["vi"], "Xem phiên bản bot");
+
+        let reply = Reply::text(format!("rift-recap v{}", env!("CARGO_PKG_VERSION")));
+        assert_eq!(reply.text, format!("rift-recap v{}", env!("CARGO_PKG_VERSION")));
+        assert!(reply.file.is_none());
+    }
+
+    #[test]
+    fn command_visibility_matches_specification() {
+        for public in ["lastgame", "rank", "version"] {
+            assert!(matches!(public, "lastgame" | "rank" | "version"), "{public} should be public");
+        }
+        for private in ["players", "config"] {
+            assert!(!matches!(private, "lastgame" | "rank" | "version"), "{private} should be private");
+        }
+    }
 }

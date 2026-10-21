@@ -30,7 +30,7 @@ You and your friends grind ranked together, then argue about who carried and who
 - **LP and rank per game** – Solo/Duo and Flex, with the LP gained or lost beside each tracked player and the rank of all ten players. `MVP`, `ACE` and `WORST` labels sit on the portraits.
 - **Daily, weekly and monthly reports** – a splash-art header with the group's LP, then players who climbed and players who dropped in two blocks, each with record, KDA, damage, CS, vision and an LP-change bar. Weekly and monthly cards add six honours (kills, deaths, damage, farm, vision, win rate).
 - **Optional AI commentary** – a short, funny line per tracked player with a title and emoji, written by any OpenAI-compatible model in the voice *you* define in a `prompt.md`. Custom Discord emojis are supported.
-- **Slash commands** – `/lastgame`, `/rank`, `/players` and admin `/config` for channels, roster and on-demand reports.
+- **Slash commands** – `/lastgame`, `/rank`, `/players`, `/version` and admin `/config` for channels, roster and on-demand reports.
 - **English and Vietnamese** – messages, images and slash-command descriptions.
 - **Tiny and self-contained** – one Rust binary. SQLite is bundled, fonts are embedded, images are drawn with `resvg`. No browser, Python or Node. A 31 MB Docker image, around 20 MB of RAM when idle and about 45 MB at peak.
 
@@ -135,6 +135,7 @@ New players are baselined silently the first time they are seen, so the bot neve
 | `/lastgame` | Posts the latest scoreboard, with AI commentary when enabled | everyone |
 | `/rank` | Current Solo/Duo and Flex rank of everyone | everyone |
 | `/players` | The tracked roster | everyone (private reply) |
+| `/version` | Show bot version | everyone |
 | `/config channel` | Set the channel for match results | Manage Server |
 | `/config rankchannel` | Enable, disable or move the report channel | Manage Server |
 | `/config addplayer` | Track an account by `Name#Tag` | Administrator |
@@ -208,7 +209,7 @@ WantedBy=multi-user.target
 
 ### Updating
 
-Tag a release (`git tag v0.2.0 && git push origin v0.2.0`) and GitHub builds, tests and publishes the static binary with a checksum and a build attestation. A small script on your server, [`deploy/rift-recap-update`](deploy/README.md), pulls new releases, verifies them, backs up the database, swaps the binary, restarts the service and rolls back if it does not come up healthy. Nothing logs in to your server and no deployment secret lives on GitHub.
+Tag a release (`git tag v0.3.0 && git push origin v0.3.0`) and GitHub builds, tests and publishes the static binary with a checksum and a build attestation. A small script on your server, [`deploy/rift-recap-update`](deploy/README.md), pulls new releases, verifies them, backs up the database, swaps the binary, restarts the service and rolls back if it does not come up healthy. Nothing logs in to your server and no deployment secret lives on GitHub.
 
 State lives in one SQLite file in WAL mode. To back it up, stop the service or use SQLite's `.backup`. Pending Discord posts are kept in the database and retried, so a restart or an outage loses nothing.
 
