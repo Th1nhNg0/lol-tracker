@@ -24,6 +24,7 @@ use serenity::all::{Client, GatewayIntents};
 use std::{path::PathBuf, sync::Arc};
 use tokio::{sync::Semaphore, task::JoinSet};
 use tracing::info;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Parser)]
 #[command(version, about = "Self-hosted League of Legends squad tracker and Discord bot. Defaults to offline configuration checking.")]
@@ -103,10 +104,13 @@ impl App {
         Ok(Arc::new(Self { cfg, store, riot, llm }))
     }
 }
+fn log_targets() -> tracing_subscriber::filter::Targets {
+    tracing_subscriber::filter::Targets::new().with_target("rift_recap", tracing::Level::INFO)
+}
 #[tokio::main]
 async fn main() {
     // Intentionally exclude dependency HTTP/gateway logs, which can contain private data.
-    tracing_subscriber::fmt().with_env_filter("rift_recap=info").with_target(false).init();
+    tracing_subscriber::registry().with(log_targets()).with(tracing_subscriber::fmt::layer().with_target(false)).init();
     if let Err(error) = execute().await {
         eprintln!("Error: {error}");
         std::process::exit(1);
@@ -222,4 +226,24 @@ fn languages(app: &App, code: Option<&str>) -> Result<Vec<Lang>> {
         Some(code) if code.eq_ignore_ascii_case("all") => Lang::ALL.to_vec(),
         Some(code) => vec![Lang::parse(code).ok_or_else(|| anyhow::anyhow!("--language must be vi, en or all"))?],
     })
+}
+
+#[cfg(test)]
+mod logging_tests {
+    #[test]
+    fn only_application_info_and_above_are_enabled() {
+        let filter = super::log_targets();
+        for target in ["rift_recap", "rift_recap::discord", "rift_recap::riot"] {
+            for level in [tracing::Level::INFO, tracing::Level::WARN, tracing::Level::ERROR] {
+                assert!(filter.would_enable(target, &level));
+            }
+            for level in [tracing::Level::DEBUG, tracing::Level::TRACE] {
+                assert!(!filter.would_enable(target, &level));
+            }
+        }
+        // Never expose dependency HTTP/gateway logs, including error-level events.
+        for target in ["reqwest", "hyper", "serenity", "serenity::gateway", "rustls"] {
+            assert!(!filter.would_enable(target, &tracing::Level::ERROR));
+        }
+    }
 }

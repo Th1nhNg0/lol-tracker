@@ -23,15 +23,48 @@ serenity = { version = "0.12", default-features = false, features = ["builder", 
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "sync"] }
 toml = "0.9"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["fmt"] }
 webp = { version = "0.3.1", default-features = false }
 
 [profile.dev]
 debug = 0
 
-# Image rendering is slow unoptimized; build the dependencies (resvg, tiny-skia, libwebp) with optimizations.
-[profile.dev.package."*"]
+# Keep image rendering fast without optimizing the entire HTTP/Discord dependency tree.
+# Cargo package overrides are not transitive, so include the hot rendering dependencies.
+[profile.dev.package.resvg]
+opt-level = 2
+[profile.dev.package.usvg]
+opt-level = 2
+[profile.dev.package.tiny-skia]
+opt-level = 2
+[profile.dev.package.tiny-skia-path]
+opt-level = 2
+[profile.dev.package.rustybuzz]
+opt-level = 2
+[profile.dev.package.ttf-parser]
+opt-level = 2
+[profile.dev.package.fontdb]
+opt-level = 2
+[profile.dev.package.png]
+opt-level = 2
+[profile.dev.package.flate2]
+opt-level = 2
+[profile.dev.package.miniz_oxide]
+opt-level = 2
+[profile.dev.package.fdeflate]
+opt-level = 2
+[profile.dev.package.libwebp-sys]
+opt-level = 2
+
+# Retain optimized native storage and cryptography in development too.
+[profile.dev.package.libsqlite3-sys]
+opt-level = 1
+[profile.dev.package.ring]
 opt-level = 2
 
 [profile.release]
 strip = true
+
+# The Discord SDK is I/O-bound; keep optimized code without costly level-3 passes.
+[profile.release.package.serenity]
+opt-level = 2

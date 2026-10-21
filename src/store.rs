@@ -214,3 +214,49 @@ impl Store {
 }
 fn encode<T: Serialize>(value: &T) -> Result<String> { Ok(serde_json::to_string(value)?) }
 fn decode<T: DeserializeOwned>(text: &str) -> Result<T> { serde_json::from_str(text).map_err(|_| anyhow::anyhow!("Invalid stored data")) }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_binding_and_rank_history() -> Result<()> {
+        let store = Store::open(Path::new(":memory:"))?;
+        store.bind("platform", "euw1")?;
+        store.bind("platform", "euw1")?;
+        assert!(store.bind("platform", "na1").is_err());
+        assert_eq!(store.setting("platform")?.as_deref(), Some("euw1"));
+        let mut rank = Rank { queue: 420, tier: "GOLD".into(), division: "II".into(), lp: 10 };
+        for at in 1..=100 {
+            rank.lp = at;
+            store.snapshot("player", &rank, at)?;
+        }
+        assert!(store.rank_at("player", 420, 0)?.is_none());
+        assert_eq!(store.rank_at("player", 420, 75)?.unwrap().rank.lp, 75);
+        assert_eq!(store.first_rank("player", 420, 50, 90)?.unwrap().at, 51);
+        assert!(store.rank_at("player", 440, 100)?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn match_and_delivery_are_atomic_and_idempotent() -> Result<()> {
+        let store = Store::open(Path::new(":memory:"))?;
+        let game = Match { id: "TEST_1".into(), queue: 420, started_at: now() - 1800, ended_at: now(), duration: 1800,
+            remake: false, participants: Vec::new(), objectives: Default::default() };
+        store.finish(&game)?;
+        store.finish(&game)?;
+        assert!(store.seen(&game.id)?);
+        assert_eq!(store.get_match(None)?.unwrap().id, game.id);
+        assert_eq!(store.matches(game.started_at, game.ended_at)?.len(), 1);
+        let delivery = store.next_delivery()?.unwrap();
+        assert!(matches!(&delivery.notice, Notice::Result(m) if m.id == game.id));
+        store.ack(delivery.id, Some((&game.id, 123, 456)))?;
+        assert!(store.next_delivery()?.is_none());
+        assert_eq!(store.message(&game.id)?, Some((123, 456)));
+        assert_eq!(store.next_commentary()?.unwrap().id, game.id);
+        store.commentary_done(&game.id, Some("commentary"))?;
+        assert!(store.next_commentary()?.is_none());
+        assert_eq!(store.recent_commentary("different-game", 6)?, ["commentary"]);
+        Ok(())
+    }
+}
