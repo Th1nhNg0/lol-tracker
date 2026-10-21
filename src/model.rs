@@ -85,11 +85,56 @@ pub struct Participant {
     pub wards: i64,
     #[serde(default)]
     pub control_wards: i64,
+    // Extra match-v5 detail kept for richer commentary and later analysis.
+    #[serde(default)]
+    pub double_kills: i64,
+    #[serde(default)]
+    pub triple_kills: i64,
+    #[serde(default)]
+    pub quadra_kills: i64,
+    #[serde(default)]
+    pub penta_kills: i64,
+    #[serde(default)]
+    pub largest_multi_kill: i64,
+    #[serde(default)]
+    pub killing_sprees: i64,
+    #[serde(default)]
+    pub largest_spree: i64,
+    #[serde(default)]
+    pub first_blood: bool,
+    #[serde(default)]
+    pub first_blood_assist: bool,
+    #[serde(default)]
+    pub first_tower: bool,
+    #[serde(default)]
+    pub solo_kills: i64,
+    /// Epic monsters stolen (Riot objective steals), including without Smite.
+    #[serde(default)]
+    pub epic_steals: i64,
+    #[serde(default)]
+    pub epic_steals_no_smite: i64,
+    #[serde(default)]
+    pub turret_plates: i64,
+    #[serde(default)]
+    pub turret_takedowns: i64,
+    #[serde(default)]
+    pub inhibitor_takedowns: i64,
+    #[serde(default)]
+    pub wards_killed: i64,
+    #[serde(default)]
+    pub gold_spent: i64,
+    #[serde(default)]
+    pub self_mitigated: i64,
+    /// Seconds spent dead.
+    #[serde(default)]
+    pub time_dead: i64,
+    #[serde(default)]
+    pub skillshots_dodged: i64,
     pub rank_before: Option<Rank>,
     pub rank_after: Option<Rank>,
     pub lp_delta: Option<i64>,
 }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Match {
     pub id: String,
     pub queue: u16,
@@ -99,6 +144,12 @@ pub struct Match {
     pub remake: bool,
     pub participants: Vec<Participant>,
     pub objectives: BTreeMap<String, BTreeMap<String, i64>>,
+    /// Riot `gameMode` (CLASSIC, ARAM, CHERRY...).
+    #[serde(default)]
+    pub mode: String,
+    /// Riot `gameVersion`, for example 15.21.1.123.
+    #[serde(default)]
+    pub game_version: String,
 }
 impl Match {
     pub fn from_riot(id: &str, value: &Value, roster: &[Player]) -> Result<Self> {
@@ -129,6 +180,19 @@ impl Match {
                 spells: vec![n(v, "summoner1Id"), n(v, "summoner2Id")],
                 runes: vec![v.pointer("/perks/styles/0/selections/0/perk").and_then(Value::as_i64).unwrap_or(0), v.pointer("/perks/styles/1/style").and_then(Value::as_i64).unwrap_or(0)],
                 wards: n(v, "wardsPlaced"), control_wards: n(v, "visionWardsBoughtInGame"),
+                double_kills: n(v, "doubleKills"), triple_kills: n(v, "tripleKills"),
+                quadra_kills: n(v, "quadraKills"), penta_kills: n(v, "pentaKills"),
+                largest_multi_kill: n(v, "largestMultiKill"), killing_sprees: n(v, "killingSprees"),
+                largest_spree: n(v, "largestKillingSpree"),
+                first_blood: v["firstBloodKill"].as_bool().unwrap_or(false),
+                first_blood_assist: v["firstBloodAssist"].as_bool().unwrap_or(false),
+                first_tower: v["firstTowerKill"].as_bool().unwrap_or(false),
+                solo_kills: ch(v, "soloKills"), epic_steals: n(v, "objectivesStolen"),
+                epic_steals_no_smite: ch(v, "epicMonsterStolenWithoutSmite"),
+                turret_plates: ch(v, "turretPlatesTaken"), turret_takedowns: n(v, "turretTakedowns"),
+                inhibitor_takedowns: n(v, "inhibitorTakedowns"), wards_killed: n(v, "wardsKilled"),
+                gold_spent: n(v, "goldSpent"), self_mitigated: n(v, "damageSelfMitigated"),
+                time_dead: n(v, "totalTimeSpentDead"), skillshots_dodged: ch(v, "skillshotsDodged"),
                 ..Default::default()
             }
         }).collect();
@@ -138,7 +202,8 @@ impl Match {
             objectives.insert(n(team, "teamId").to_string(), values);
         }
         Ok(Self { id: id.to_owned(), queue: n(info, "queueId") as u16, started_at, ended_at, duration,
-            remake: rows.iter().any(|v| v["gameEndedInEarlySurrender"].as_bool().unwrap_or(false)), participants, objectives })
+            remake: rows.iter().any(|v| v["gameEndedInEarlySurrender"].as_bool().unwrap_or(false)), participants, objectives,
+            mode: s(info, "gameMode"), game_version: s(info, "gameVersion") })
     }
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -149,3 +214,5 @@ pub enum Notice {
 }
 pub fn n(v: &Value, key: &str) -> i64 { v[key].as_i64().unwrap_or(0) }
 pub fn s(v: &Value, key: &str) -> String { v[key].as_str().unwrap_or("").to_owned() }
+/// A Riot `challenges` counter; missing or non-numeric entries read as zero.
+pub fn ch(v: &Value, key: &str) -> i64 { v["challenges"][key].as_i64().unwrap_or(0) }

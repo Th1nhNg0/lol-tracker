@@ -23,7 +23,7 @@ fn game(teams: u16, per_team: u64, remake: bool) -> Match {
         }
     }
     let objectives = (teams == 2).then(|| [("100".to_owned(), BTreeMap::from([("dragon".to_owned(), 3), ("tower".to_owned(), 7)])), ("200".to_owned(), BTreeMap::from([("baron".to_owned(), 1)]))].into()).unwrap_or_default();
-    Match { id: "TEST_1".into(), queue: 440, started_at: 1_700_000_000, ended_at: 1_700_001_800, duration: 1800, remake, participants, objectives }
+    Match { id: "TEST_1".into(), queue: 440, started_at: 1_700_000_000, ended_at: 1_700_001_800, duration: 1800, remake, participants, objectives, ..Default::default() }
 }
 
 /// Decodes the WebP and checks it is a 2x render of the 1200 px layout.

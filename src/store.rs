@@ -1,8 +1,10 @@
 use crate::model::{Match, Notice, Player, Rank, Snapshot, now};
 use anyhow::{Context, Result, ensure};
+use flate2::{Compression, read::GzDecoder, write::GzEncoder};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Serialize, de::DeserializeOwned};
-use std::{fs, path::Path, sync::{Mutex, MutexGuard}};
+use serde_json::Value;
+use std::{fs, io::{Read, Write}, path::Path, sync::{Mutex, MutexGuard}};
 
 pub struct Store(Mutex<Connection>);
 pub struct Delivery { pub id: i64, pub notice: Notice }
@@ -27,6 +29,8 @@ impl Store {
             CREATE TABLE IF NOT EXISTS matches(id TEXT PRIMARY KEY,ended_at INTEGER NOT NULL,data TEXT NOT NULL,commented INTEGER NOT NULL DEFAULT 0);
             CREATE INDEX IF NOT EXISTS matches_time ON matches(ended_at);
             CREATE TABLE IF NOT EXISTS ranks(puuid TEXT,queue INTEGER,at INTEGER,data TEXT NOT NULL,PRIMARY KEY(puuid,queue,at));
+            CREATE TABLE IF NOT EXISTS raw_matches(id TEXT PRIMARY KEY,ended_at INTEGER NOT NULL,data BLOB NOT NULL);
+            CREATE INDEX IF NOT EXISTS raw_matches_time ON raw_matches(ended_at);
             DROP TABLE IF EXISTS pending;
             CREATE TABLE IF NOT EXISTS outbox(id INTEGER PRIMARY KEY,unique_key TEXT UNIQUE,at INTEGER NOT NULL,data TEXT NOT NULL,retry_at INTEGER NOT NULL DEFAULT 0,attempts INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS messages(game_id TEXT PRIMARY KEY,channel_id TEXT NOT NULL,message_id TEXT NOT NULL,finished INTEGER NOT NULL,at INTEGER NOT NULL);
@@ -128,6 +132,24 @@ impl Store {
         }
         tx.commit()?; Ok(())
     }
+    /// Keep the untouched Riot payload (gzip) for a match this store already holds, so later
+    /// features can derive new statistics without refetching or a schema migration. Best effort:
+    /// a game nobody tracks has no row in `matches`, and its payload is dropped.
+    pub fn save_raw(&self, m: &Match, raw: &Value) -> Result<()> {
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&serde_json::to_vec(raw)?)?;
+        let blob = encoder.finish()?;
+        self.db()?.execute("INSERT OR REPLACE INTO raw_matches(id,ended_at,data) SELECT id,ended_at,? FROM matches WHERE id=?", params![blob, m.id])?;
+        Ok(())
+    }
+    /// The stored Riot payload for one match, or `None` when it was never kept.
+    pub fn raw_match(&self, id: &str) -> Result<Option<Value>> {
+        let row: Option<Vec<u8>> = self.db()?.query_row("SELECT data FROM raw_matches WHERE id=?", [id], |r| r.get(0)).optional()?;
+        let Some(blob) = row else { return Ok(None) };
+        let mut text = Vec::new();
+        GzDecoder::new(blob.as_slice()).read_to_end(&mut text)?;
+        Ok(Some(serde_json::from_slice(&text).map_err(|_| anyhow::anyhow!("Invalid stored match payload"))?))
+    }
     /// Silently drop a game that no longer concerns any tracked player.
     pub fn discard(&self, id: &str) -> Result<()> {
         let mut db = self.db()?; let tx = db.transaction()?;
@@ -215,6 +237,8 @@ impl Store {
         let mut db = self.db()?; let tx = db.transaction()?;
         // Outbox JSON references old matches; preserve history until its notification is acknowledged.
         tx.execute("DELETE FROM matches WHERE ended_at<? AND NOT EXISTS(SELECT 1 FROM outbox WHERE unique_key='result/' || matches.id)", [cutoff])?;
+        // Raw payloads follow the same retention as the matches they belong to.
+        tx.execute("DELETE FROM raw_matches WHERE ended_at<? OR id NOT IN(SELECT id FROM matches)", [cutoff])?;
         tx.execute("DELETE FROM ranks WHERE at<? AND (puuid,queue,at) NOT IN (SELECT puuid,queue,MAX(at) FROM ranks GROUP BY puuid,queue)", [cutoff])?;
         tx.execute("DELETE FROM baseline WHERE at<?", [cutoff])?;
         tx.execute("DELETE FROM seen WHERE at<? AND NOT EXISTS(SELECT 1 FROM outbox WHERE unique_key='result/' || seen.id)", [cutoff])?;
@@ -255,7 +279,7 @@ mod tests {
     fn match_and_delivery_are_atomic_and_idempotent() -> Result<()> {
         let store = Store::open(Path::new(":memory:"))?;
         let game = Match { id: "TEST_1".into(), queue: 420, started_at: now() - 1800, ended_at: now(), duration: 1800,
-            remake: false, participants: Vec::new(), objectives: Default::default() };
+            remake: false, participants: Vec::new(), ..Default::default() };
         store.finish(&game)?;
         store.finish(&game)?;
         assert!(store.seen(&game.id)?);
@@ -273,6 +297,20 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn raw_payload_is_kept_only_for_stored_matches() -> Result<()> {
+        let store = Store::open(Path::new(":memory:"))?;
+        let game = Match { id: "TEST_RAW".into(), ended_at: now(), duration: 1800, ..Default::default() };
+        let raw = serde_json::json!({"metadata":{"matchId":"TEST_RAW"},"info":{"gameDuration":1800,"participants":[{"participantId":1,"challenges":{"soloKills":2}}]}});
+        // A game the store never accepted keeps no payload.
+        store.save_raw(&game, &raw)?;
+        assert!(store.raw_match(&game.id)?.is_none());
+        store.finish(&game)?;
+        store.save_raw(&game, &raw)?;
+        assert_eq!(store.raw_match(&game.id)?.unwrap(), raw);
+        assert!(store.raw_match("MISSING")?.is_none());
+        Ok(())
+    }
     #[test]
     fn failed_match_scan_releases_database_lock() -> Result<()> {
         let store = Store::open(Path::new(":memory:"))?;

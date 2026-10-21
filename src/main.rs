@@ -71,6 +71,12 @@ enum Mode {
         #[arg(long, default_value_t = 15)]
         max_matches: usize,
     },
+    /// Print the exact JSON the LLM receives for one match (a stored one, or the newest real match).
+    /// Read-only: no LLM call, no network writes, useful for tuning `prompt.md`.
+    CommentaryContext {
+        #[arg(long)]
+        match_id: Option<String>,
+    },
     /// Run tracking. Discord sends are enabled unless --no-discord is supplied.
     Run {
         #[arg(long)]
@@ -177,6 +183,12 @@ async fn execute() -> Result<()> {
                 std::fs::write(directory.join(format!("{stem}-{}{suffix}.txt", period.key())), report.text(lang))?;
                 info!(period = period.key(), language = lang.code(), "Saved report card and text");
             }
+            Ok(())
+        }
+        Mode::CommentaryContext { match_id } => {
+            let game = render::preview_match(&app, match_id.as_deref()).await?;
+            let recent = app.store.recent_commentary(&game.id, 6)?;
+            println!("{}", llm::context(&game, app.cfg.llm.send_names, &recent));
             Ok(())
         }
         Mode::Run { no_discord, once, register_commands } => {

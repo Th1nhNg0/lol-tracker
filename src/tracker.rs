@@ -1,5 +1,6 @@
 use crate::{App, model::{Match, Player, now}, reports};
 use anyhow::{Result, bail};
+use serde_json::Value;
 use std::{collections::HashSet, sync::Arc, time::Duration};
 use tokio::time::{Instant, sleep};
 use tracing::{info, warn};
@@ -105,11 +106,11 @@ impl Tracker {
                 if !self.app.store.skip(&player.puuid, &id)? { candidates.insert(id); }
             }
         }
-        let mut matches = Vec::new();
+        let mut matches: Vec<(Match, Value)> = Vec::new();
         for id in candidates {
             match self.app.riot.match_data(&id).await {
                 Ok(Some(value)) => match Match::from_riot(&id, &value, &roster) {
-                    Ok(m) => matches.push(m),
+                    Ok(m) => matches.push((m, value)),
                     // Permanent for this payload: never refetch it on every sweep.
                     Err(error) => { warn!(%error, "Match normalization failed; skipping it"); self.app.store.mark_seen(&id)?; }
                 },
@@ -117,13 +118,15 @@ impl Tracker {
                 Err(error) => warn!(%error, "Match retrieval failed"),
             }
         }
-        matches.sort_by_key(|m| m.ended_at);
-        for m in matches {
+        matches.sort_by_key(|(m, _)| m.ended_at);
+        for (m, raw) in matches {
             if now() - m.ended_at > i64::from(self.app.cfg.riot.catch_up_hours) * 3600 {
                 self.app.store.mark_seen(&m.id)?;
                 continue;
             }
-            if let Err(error) = self.finish(m).await { warn!(%error, "Storing a finished match failed; will retry"); }
+            if let Err(error) = self.finish(m.clone()).await { warn!(%error, "Storing a finished match failed; will retry"); }
+            // The untouched payload is the long-term record; keep it only for matches the store accepted.
+            else if let Err(error) = self.app.store.save_raw(&m, &raw) { warn!(%error, "Storing the raw match payload failed"); }
         }
         Ok(())
     }

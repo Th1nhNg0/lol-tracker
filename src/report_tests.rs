@@ -48,7 +48,7 @@ fn streamed_reports_match_materialized_windows() {
             id: p + 1, puuid: format!("puuid{p}"), name: format!("Old name{p}"), tracked: i != 2, champion: if i % 2 == 0 { "Ahri" } else { "Lux" }.into(), team: 100, win: i % 2 == 0,
             kills: 5, deaths: 3, assists: 9, damage: 12_000, cs: 150, vision: 25, ..Default::default()
         }).collect();
-        app.store.finish(&Match { id: format!("TEST_{i}"), queue: [420, 440, 450][i % 3], started_at: at - 1800, ended_at: at, duration: 1800, remake: i == 1, participants, objectives: Default::default() }).unwrap();
+        app.store.finish(&Match { id: format!("TEST_{i}"), queue: [420, 440, 450][i % 3], started_at: at - 1800, ended_at: at, duration: 1800, remake: i == 1, participants, ..Default::default() }).unwrap();
     }
     app.store.remove_player("Player2#TEST").unwrap();
     for zone in ["UTC", "Asia/Ho_Chi_Minh", "America/New_York"] {

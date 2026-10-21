@@ -213,6 +213,8 @@ Tag a release (`git tag v0.3.0 && git push origin v0.3.0`) and GitHub builds, te
 
 State lives in one SQLite file in WAL mode. To back it up, stop the service or use SQLite's `.backup`. Pending Discord posts are kept in the database and retried, so a restart or an outage loses nothing.
 
+Besides the normalized match, the untouched Riot payload of every stored game is kept gzipped in the same database (`raw_matches`, pruned with `retention_days`), so new statistics can be derived later without refetching or a schema migration.
+
 ## How it works
 
 ```mermaid
