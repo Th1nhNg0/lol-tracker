@@ -9,6 +9,10 @@ use tracing::{info, warn};
 const LP_WINDOW_SECS: i64 = 1200;
 /// A restart this quick keeps the previous run's rank snapshots trusted (a deploy must not cost LP).
 const CONTINUITY_SECS: i64 = 180;
+/// Riot's league endpoint can trail a finished game by a minute or more, so an unchanged rank is
+/// rechecked this many times, this far apart, before it is accepted as "no LP change".
+const RANK_ATTEMPTS: u32 = 8;
+const RANK_RETRY_SECS: u64 = 10;
 
 pub struct Tracker {
     app: Arc<App>,
@@ -24,8 +28,11 @@ impl Tracker {
     pub fn new(app: Arc<App>) -> Self {
         let now = Instant::now();
         // After a longer gap other games may sit between an old snapshot and the next game, so only newer snapshots count.
-        let since = app.store.setting("heartbeat").ok().flatten().and_then(|t| t.parse::<i64>().ok())
-            .filter(|t| crate::model::now() - t <= CONTINUITY_SECS).unwrap_or_else(crate::model::now);
+        // A quick restart inherits the stored continuity start; the heartbeat alone would only prove the last few seconds.
+        let setting = |key: &str| app.store.setting(key).ok().flatten().and_then(|t| t.parse::<i64>().ok());
+        let quick = setting("heartbeat").filter(|t| crate::model::now() - t <= CONTINUITY_SECS);
+        let since = quick.map(|beat| setting("tracking_since").filter(|s| *s <= beat).unwrap_or(beat)).unwrap_or_else(crate::model::now);
+        if let Err(error) = app.store.set("tracking_since", &since.to_string()) { warn!(%error, "Could not store the tracking start"); }
         Self { app, since, last_beat: 0, history_due: now, rank_due: now, prune_due: now }
     }
     pub async fn run(mut self, once: bool) -> Result<()> {
@@ -131,7 +138,7 @@ impl Tracker {
             part.rank_before = self.app.store.rank_at(&part.puuid, m.queue, m.started_at).ok().flatten()
                 .filter(|s| s.at >= self.since).map(|s| s.rank);
             let mut after = None;
-            for attempt in 0..3 {
+            for attempt in 0..RANK_ATTEMPTS {
                 match self.app.riot.ranks(&part.puuid).await {
                     Ok(ranks) => {
                         for rank in &ranks { self.app.store.snapshot(&part.puuid, rank, now())?; }
@@ -139,8 +146,8 @@ impl Tracker {
                     }
                     Err(error) => { warn!(%error, "Post-game rank unavailable; preserving match result"); break; }
                 }
-                if part.rank_before.is_none() || after != part.rank_before || m.remake || attempt == 2 { break; }
-                sleep(Duration::from_secs(5)).await;
+                if part.rank_before.is_none() || after != part.rank_before || m.remake || attempt + 1 == RANK_ATTEMPTS { break; }
+                sleep(Duration::from_secs(RANK_RETRY_SECS)).await;
             }
             // A post-game lookup long after the match can include later games.
             if now() - m.ended_at <= LP_WINDOW_SECS {
