@@ -13,4 +13,4 @@ if [ "$bytes" -lt 4000 ]; then
   exit 1
 fi
 
-exec python3 .auto/harness.py --fixtures 8 --modern 1 --workers 8 "$@"
+exec python3 .auto/harness.py --fixtures 12 --modern 1 --workers 10 "$@"

@@ -55,7 +55,11 @@ def main() -> int:
              f"(baseline {run.get('base_emoji_invalid', 0)}); the bot posts those without one")
     if run["field_leak"]:
         fail(f"{run['field_leak']} lines read a field name out loud")
-    if run["delta_faithful"] < -0.5:
+    # The judge's faithful score is a 0-10 human-ish rating of a handful of lines: across logged
+    # runs its per-pair delta has sd 3.1, so at 12 fixtures the standard error is ~0.9. A -2.5 gate
+    # is ~2.8 sigma, i.e. it fires on a real accuracy drop, not on a lucky baseline draw. Actual
+    # fabrication is caught exactly by the unmatched-number check below.
+    if run["delta_faithful"] < -2.5:
         fail(f"faithfulness dropped by {abs(run['delta_faithful'])} points vs baseline")
     if run["ungrounded_pct"] > run["base_ungrounded_pct"] + 5.0:
         fail(f"unmatched numbers rose to {run['ungrounded_pct']}% (baseline {run['base_ungrounded_pct']}%)")
