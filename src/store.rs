@@ -123,6 +123,19 @@ impl Store {
         let row: Option<(i64, String)> = self.db()?.query_row("SELECT at,data FROM ranks WHERE puuid=? AND queue=? AND at>? AND at<=? ORDER BY at LIMIT 1", params![puuid, queue, start, end], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
         row.map(|(at, text)| Ok(Snapshot { at, rank: decode(&text)? })).transpose()
     }
+    /// Unix time of the last game whose post-game rank lookup succeeded for this account, or `None`
+    /// before the first one. A snapshot older than this may predate games the bot never accounted
+    /// for, so a match only trusts a before-rank taken at or after it. Unlike a process start time
+    /// it survives restarts.
+    pub fn rank_checked(&self, puuid: &str) -> Result<Option<i64>> {
+        Ok(self.db()?.query_row("SELECT value FROM settings WHERE key=?", [format!("rank-checked/{puuid}")], |r| r.get::<_, String>(0)).optional()?.and_then(|t| t.parse().ok()))
+    }
+    /// Record a confirmed rank lookup. The marker never moves backwards, so a late-arriving old
+    /// match cannot widen the window for a newer one.
+    pub fn mark_rank_checked(&self, puuid: &str, at: i64) -> Result<()> {
+        self.db()?.execute("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE CAST(excluded.value AS INTEGER)>CAST(settings.value AS INTEGER)", params![format!("rank-checked/{puuid}"), at])?;
+        Ok(())
+    }
     pub fn finish(&self, m: &Match) -> Result<()> {
         let mut db = self.db()?; let tx = db.transaction()?;
         let inserted = tx.execute("INSERT OR IGNORE INTO seen VALUES(?,?)", params![m.id, now()])?;
@@ -294,6 +307,22 @@ mod tests {
         store.commentary_done(&game.id, Some("commentary"))?;
         assert!(store.next_commentary()?.is_none());
         assert_eq!(store.recent_commentary("different-game", 6)?, ["commentary"]);
+        Ok(())
+    }
+
+    #[test]
+    fn rank_marker_only_moves_forward() -> Result<()> {
+        let store = Store::open(Path::new(":memory:"))?;
+        assert!(store.rank_checked("puuid")?.is_none());
+        store.mark_rank_checked("puuid", 200)?;
+        assert_eq!(store.rank_checked("puuid")?, Some(200));
+        // A late-arriving old match must not widen the window for a newer one.
+        store.mark_rank_checked("puuid", 100)?;
+        assert_eq!(store.rank_checked("puuid")?, Some(200));
+        store.mark_rank_checked("puuid", 300)?;
+        assert_eq!(store.rank_checked("puuid")?, Some(300));
+        // Another account is unaffected.
+        assert!(store.rank_checked("other")?.is_none());
         Ok(())
     }
 

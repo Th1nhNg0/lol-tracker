@@ -12,6 +12,9 @@ pub async fn refresh_ranks(app: &App) -> Result<usize> {
     for player in app.store.players()?.iter().filter(|p| !p.puuid.is_empty()) {
         match app.riot.ranks(&player.puuid).await {
             Ok(ranks) => {
+                // A periodic refresh must not advance the rank-checked marker: it says nothing about
+                // which games are accounted for, and doing so would discard a correct pre-game rank
+                // for the first match after a restart, which is the LP bug this marker exists to fix.
                 for rank in ranks { app.store.snapshot(&player.puuid, &rank, now())?; }
                 succeeded += 1;
             }

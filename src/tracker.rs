@@ -11,8 +11,9 @@ const LP_WINDOW_SECS: i64 = 1200;
 /// A restart this quick keeps the previous run's rank snapshots trusted (a deploy must not cost LP).
 const CONTINUITY_SECS: i64 = 180;
 /// Riot's league endpoint can trail a finished game by a minute or more, so an unchanged rank is
-/// rechecked this many times, this far apart, before it is accepted as "no LP change".
-const RANK_ATTEMPTS: u32 = 8;
+/// rechecked this many times, this far apart, before it is accepted as "no LP change". The wait is
+/// shared by every tracked player in the game, so this bound is the whole window, not per player.
+const RANK_ATTEMPTS: u32 = 12;
 const RANK_RETRY_SECS: u64 = 10;
 
 pub struct Tracker {
@@ -136,28 +137,47 @@ impl Tracker {
         for part in &mut m.participants {
             part.tracked &= current.contains(&part.puuid);
             if !part.tracked || !matches!(m.queue, 420 | 440) { continue; }
-            // The newest snapshot taken at or before the start by this process. Older snapshots
-            // could span downtime with other games.
-            part.rank_before = self.app.store.rank_at(&part.puuid, m.queue, m.started_at).ok().flatten()
-                .filter(|s| s.at >= self.since).map(|s| s.rank);
-            let mut after = None;
-            for attempt in 0..RANK_ATTEMPTS {
-                match self.app.riot.ranks(&part.puuid).await {
+            // The newest snapshot at or before the start, trusted from the last confirmed lookup.
+            part.rank_before = before_rank(&self.app.store, &part.puuid, m.queue, m.started_at, self.since);
+        }
+        // Riot's league endpoint can trail a finished game by a minute or more, so a rank that has not
+        // moved is re-asked, with one shared wait for every tracked player in the game. Only a game
+        // that just ended can still settle; an older one is re-read once and never waited on.
+        let fresh = now() - m.ended_at <= LP_WINDOW_SECS;
+        let attempts = if fresh { RANK_ATTEMPTS } else { 1 };
+        let mut pending: Vec<usize> = (0..m.participants.len())
+            .filter(|&i| m.participants[i].tracked && matches!(m.queue, 420 | 440)).collect();
+        for attempt in 0..attempts {
+            let mut again = Vec::new();
+            for &i in &pending {
+                let puuid = m.participants[i].puuid.clone();
+                let before = m.participants[i].rank_before.clone();
+                match self.app.riot.ranks(&puuid).await {
                     Ok(ranks) => {
-                        for rank in &ranks { self.app.store.snapshot(&part.puuid, rank, now())?; }
-                        after = ranks.into_iter().find(|r| r.queue == m.queue);
+                        if !ranks.is_empty() {
+                            for rank in &ranks { self.app.store.snapshot(&puuid, rank, now())?; }
+                            if let Err(error) = self.app.store.mark_rank_checked(&puuid, m.ended_at) { warn!(%error, "Could not record a confirmed rank lookup"); }
+                        }
+                        let after = ranks.into_iter().find(|r| r.queue == m.queue);
+                        // With no before-rank there is nothing to wait for, and a remake changes no LP.
+                        let settled = before.is_none() || after != before || m.remake;
+                        if !settled && attempt + 1 < attempts { again.push(i); }
+                        m.participants[i].rank_after = after;
                     }
-                    Err(error) => { warn!(%error, "Post-game rank unavailable; preserving match result"); break; }
+                    Err(error) => { warn!(%error, "Post-game rank unavailable; preserving match result"); }
                 }
-                if part.rank_before.is_none() || after != part.rank_before || m.remake || attempt + 1 == RANK_ATTEMPTS { break; }
-                sleep(Duration::from_secs(RANK_RETRY_SECS)).await;
             }
-            // A post-game lookup long after the match can include later games.
-            if now() - m.ended_at <= LP_WINDOW_SECS {
-                part.lp_delta = part.rank_before.as_ref().and_then(|r| r.absolute()).zip(after.as_ref().and_then(|r| r.absolute()))
+            pending = again;
+            if pending.is_empty() { break; }
+            sleep(Duration::from_secs(RANK_RETRY_SECS)).await;
+        }
+        for part in m.participants.iter_mut().filter(|p| p.tracked) {
+            // Only a lookup close to the end can be compared with the before-rank without spanning later games.
+            if fresh {
+                part.lp_delta = part.rank_before.as_ref().and_then(|r| r.absolute()).zip(part.rank_after.as_ref().and_then(|r| r.absolute()))
                     .map(|(a, b)| b - a).filter(|delta| *delta != 0 || m.remake);
             }
-            part.rank_after = after;
+            part.rank_after = part.rank_after.take().or_else(|| part.rank_before.clone());
         }
         if m.participants.iter().any(|p| p.tracked) {
             // Everyone else's rank for the scoreboard. A failure (usually the rate limit) only drops the remaining ranks.
@@ -177,9 +197,53 @@ impl Tracker {
     }
 }
 
+/// The newest rank snapshot at or before the start, trusted from the end of the account's last
+/// accounted game. An older snapshot may predate games played while the bot was down, which would
+/// fold several games into one LP change. A process start (`since`) only bounds an account with no
+/// accounted game yet; the stored marker survives restarts, so a deploy no longer costs LP.
+fn before_rank(store: &crate::store::Store, puuid: &str, queue: u16, start: i64, since: i64) -> Option<crate::model::Rank> {
+    let trusted = store.rank_checked(puuid).ok().flatten().unwrap_or(since);
+    store.rank_at(puuid, queue, start).ok().flatten().filter(|s| s.at >= trusted).map(|s| s.rank)
+}
+
+
 pub fn parse_player(id: &str, nickname: &str) -> Result<Player> {
     let (name, tag) = id.trim().rsplit_once('#').ok_or_else(|| anyhow::anyhow!("Riot ID must be Name#Tag"))?;
     let player = Player { game_name: name.trim().into(), tag_line: tag.trim().into(), nickname: nickname.trim().into(), puuid: String::new(), baselined: false };
     player.validate()?;
     Ok(player)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Rank;
+    use std::path::Path;
+
+    fn snapshot(store: &crate::store::Store, puuid: &str, at: i64, lp: i64) {
+        store.snapshot(puuid, &Rank { queue: 420, tier: "EMERALD".into(), division: "I".into(), lp }, at).unwrap();
+    }
+
+    #[test]
+    fn before_rank_trusts_the_last_confirmed_lookup() {
+        let store = crate::store::Store::open(Path::new(":memory:")).unwrap();
+        snapshot(&store, "first", 100, 10);
+        // An account with no lookup yet is bounded by the process start, as before.
+        assert_eq!(before_rank(&store, "first", 420, 150, 300).map(|r| r.lp), None);
+        assert_eq!(before_rank(&store, "first", 420, 150, 50).map(|r| r.lp), Some(10));
+
+        snapshot(&store, "known", 200, 10);
+        store.mark_rank_checked("known", 200).unwrap();
+        // A restart (since 240) must not discard the rank confirmed at 200: this is the LP bug.
+        assert_eq!(before_rank(&store, "known", 420, 250, 240).map(|r| r.lp), Some(10));
+        // The marker is the previous game's end, so the snapshot taken just after it still counts.
+        store.mark_rank_checked("known", 180).unwrap();
+        assert_eq!(before_rank(&store, "known", 420, 250, 240).map(|r| r.lp), Some(10));
+        // A start before that confirmation, or a queue it never covered, stays unknown.
+        assert_eq!(before_rank(&store, "known", 420, 190, 50).map(|r| r.lp), None);
+        assert_eq!(before_rank(&store, "known", 440, 250, 240).map(|r| r.lp), None);
+        // A newer confirmation supersedes an older snapshot rather than trusting it.
+        store.mark_rank_checked("known", 300).unwrap();
+        assert_eq!(before_rank(&store, "known", 420, 350, 50).map(|r| r.lp), None);
+    }
 }
