@@ -1,0 +1,2 @@
+Defaults:riftdeploy env_keep += "SSH_ORIGINAL_COMMAND"
+riftdeploy ALL=(root) NOPASSWD: /usr/local/sbin/rift-recap-github-ssh
