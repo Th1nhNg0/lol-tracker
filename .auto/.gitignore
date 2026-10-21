@@ -1,9 +1,0 @@
-# Real match payloads, generated recaps and the private persona stay local:
-# prompt.md holds the friends' nicknames and inside jokes and the repo is public.
-fixtures/
-runs/
-cache/
-recent_pool.jsonl
-last_run.json
-baseline.md
-best.md
