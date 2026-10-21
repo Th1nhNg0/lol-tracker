@@ -206,6 +206,10 @@ MemoryMax=300M
 WantedBy=multi-user.target
 ```
 
+### Updating
+
+Tag a release (`git tag v0.2.0 && git push origin v0.2.0`) and GitHub builds, tests and publishes the static binary with a checksum and a build attestation. A small script on your server, [`deploy/rift-recap-update`](deploy/README.md), pulls new releases, verifies them, backs up the database, swaps the binary, restarts the service and rolls back if it does not come up healthy. Nothing logs in to your server and no deployment secret lives on GitHub.
+
 State lives in one SQLite file in WAL mode. To back it up, stop the service or use SQLite's `.backup`. Pending Discord posts are kept in the database and retried, so a restart or an outage loses nothing.
 
 ## How it works

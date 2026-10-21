@@ -1,0 +1,541 @@
+#!/usr/bin/env python3
+"""Pull-based updater for a self-hosted rift-recap.
+
+Run it on the server (from cron, a systemd timer or any scheduler). It asks GitHub for the latest
+release of the repository named in its config, downloads the static binary, checks it against the
+release's SHA256SUMS, and only then swaps it in:
+
+  1. the new binary must identify itself as the release tag and pass `check` against a COPY of the
+     live config and database (with dummy secrets, so the unverified binary never sees real ones);
+  2. the SQLite database and the current binary are backed up (the backup is restore-tested);
+  3. the binary is replaced, the service restarted and watched until it is stable;
+  4. on any failure the previous binary is put back, and the database snapshot is restored only if
+     the new binary changed the schema.
+
+Nothing here is specific to one server: every path and name comes from the TOML config
+(see rift-recap-update.example.toml). The script needs permission to restart the service and to
+write the install directory, so run it as the user that owns the service (usually root).
+
+Commands:
+  rift-recap-update [update] [--tag vX.Y.Z] [--force]   install the latest (or a given) release
+  rift-recap-update update --dry-run                   download and verify only; change nothing on the server
+  rift-recap-update check                              print the installed and latest release
+  rift-recap-update status                             print service health as JSON (exit 1 if unhealthy)
+"""
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import fcntl
+import hashlib
+import json
+import os
+import re
+import shutil
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import time
+import tomllib
+import urllib.request
+from pathlib import Path
+
+DEFAULT_CONFIG = "/etc/rift-recap/update.toml"
+MAX_BINARY_BYTES = 128 * 1024 * 1024
+TAG = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?")
+# Throwaway values for the pre-flight check: the candidate has not been trusted yet.
+DUMMY_ENV = "RIOT_API_KEY=preflight\nDISCORD_TOKEN=preflight\nLLM_API_KEY=preflight\n"
+
+
+class Settings:
+    def __init__(self, path: Path):
+        raw = tomllib.loads(path.read_text(encoding="utf-8"))
+        unknown = set(raw) - {"repo", "service", "install_dir", "binary", "config", "env_file", "backup_dir", "scratch_dir", "asset",
+                              "require_attestation", "notify_command", "systemctl", "api_base", "keep_database_backups", "keep_binary_backups", "health_timeout_secs"}
+        if unknown:
+            fail(f"unknown setting(s) in {path}: {', '.join(sorted(unknown))}")
+        try:
+            self.repo: str = raw["repo"]
+            self.service: str = raw["service"]
+            self.install_dir = Path(raw["install_dir"])
+        except KeyError as error:
+            fail(f"missing required setting {error} in {path}")
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", self.repo):
+            fail("repo must look like owner/name")
+        self.binary = self.install_dir / raw.get("binary", "rift-recap")
+        self.config = self.install_dir / raw.get("config", "config.toml")
+        self.env_file = self.install_dir / raw.get("env_file", ".env")
+        self.marker = self.install_dir / ".deployed-release.json"
+        self.lock = self.install_dir / ".update.lock"
+        self.backup_root = Path(raw.get("backup_dir", "/var/backups/rift-recap"))
+        self.scratch = Path(raw.get("scratch_dir", tempfile.gettempdir()))
+        self.asset: str = raw.get("asset", "rift-recap-x86_64-linux-musl")
+        self.require_attestation: bool = raw.get("require_attestation", False)
+        self.notify_command: list[str] = raw.get("notify_command", [])
+        self.systemctl: list[str] = raw.get("systemctl", ["systemctl"])
+        self.api_base: str = raw.get("api_base", "https://api.github.com").rstrip("/")
+        self.download_base = "https://github.com" if self.api_base == "https://api.github.com" else self.api_base
+        self.keep_db: int = raw.get("keep_database_backups", 10)
+        self.keep_bin: int = raw.get("keep_binary_backups", 5)
+        self.health_timeout: int = raw.get("health_timeout_secs", 30)
+
+
+def fail(message: str, code: int = 1) -> None:
+    print(message, file=sys.stderr)
+    raise SystemExit(code)
+
+
+def run(argv: list[str], timeout: int = 30, check: bool = True, **kwargs) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(argv, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout, **kwargs)
+    if check and result.returncode != 0:
+        raise RuntimeError(f"command failed: {Path(argv[0]).name} (exit {result.returncode}) {result.stderr.strip()[:300]}")
+    return result
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+# ---------------------------------------------------------------- GitHub
+
+def http_get(url: str, accept: str = "application/octet-stream", limit: int = MAX_BINARY_BYTES) -> bytes:
+    headers = {"User-Agent": "rift-recap-update", "Accept": accept}
+    if os.environ.get("GITHUB_TOKEN"):
+        headers["Authorization"] = f"Bearer {os.environ['GITHUB_TOKEN']}"
+    with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=60) as response:
+        data = response.read(limit + 1)
+    if len(data) > limit:
+        raise RuntimeError(f"download exceeds {limit} bytes: {url}")
+    return data
+
+
+def release_info(settings: Settings, tag: str | None) -> dict:
+    path = f"releases/tags/{tag}" if tag else "releases/latest"
+    info = json.loads(http_get(f"{settings.api_base}/repos/{settings.repo}/{path}", "application/vnd.github+json", 4 * 1024 * 1024))
+    name = info.get("tag_name", "")
+    if not TAG.fullmatch(name):
+        raise RuntimeError(f"release tag {name!r} is not a vX.Y.Z version")
+    if info.get("draft") or info.get("prerelease"):
+        raise RuntimeError(f"release {name} is a draft or pre-release")
+    return info
+
+
+def asset_url(settings: Settings, info: dict, name: str) -> str:
+    for asset in info.get("assets", []):
+        if asset.get("name") == name:
+            url = asset["browser_download_url"]
+            expected = f"{settings.download_base}/{settings.repo}/releases/download/{info['tag_name']}/"
+            if not url.startswith(expected):
+                raise RuntimeError(f"unexpected download URL for {name}")
+            return url
+    raise RuntimeError(f"release {info['tag_name']} has no asset named {name}")
+
+
+def fetch_release(settings: Settings, info: dict, directory: Path) -> Path:
+    """Downloads the binary and returns its path after checking it against SHA256SUMS."""
+    sums = http_get(asset_url(settings, info, "SHA256SUMS"), limit=1024 * 1024).decode("utf-8", "replace")
+    expected = next((line.split()[0] for line in sums.splitlines() if len(line.split()) == 2 and line.split()[1].lstrip("*") == settings.asset), None)
+    if not expected or not re.fullmatch(r"[0-9a-f]{64}", expected):
+        raise RuntimeError(f"SHA256SUMS has no entry for {settings.asset}")
+    path = directory / settings.asset
+    path.write_bytes(http_get(asset_url(settings, info, settings.asset)))
+    if sha256_file(path) != expected:
+        raise RuntimeError("downloaded binary does not match SHA256SUMS")
+    if settings.require_attestation:
+        if not shutil.which("gh"):
+            raise RuntimeError("require_attestation is set but the gh CLI is not installed")
+        run(["gh", "attestation", "verify", str(path), "--repo", settings.repo], timeout=120)
+    return path
+
+
+# ---------------------------------------------------------------- SQLite
+
+def sqlite_uri(path: Path) -> str:
+    return path.resolve().as_uri() + "?mode=ro"
+
+
+def db_facts(path: Path) -> dict:
+    connection = sqlite3.connect(sqlite_uri(path), uri=True, timeout=30)
+    try:
+        integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
+        if integrity != "ok":
+            raise RuntimeError(f"SQLite integrity check failed: {integrity}")
+        tables: dict[str, dict] = {}
+        names = [row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+        for name in names:
+            quoted = '"' + name.replace('"', '""') + '"'
+            tables[name] = {"columns": [row[1] for row in connection.execute(f"PRAGMA table_info({quoted})")],
+                            "rows": connection.execute(f"SELECT count(*) FROM {quoted}").fetchone()[0]}
+        return {"integrity": integrity, "user_version": connection.execute("PRAGMA user_version").fetchone()[0], "tables": tables}
+    finally:
+        connection.close()
+
+
+def schema_of(facts: dict) -> dict:
+    return {"user_version": facts["user_version"], "tables": {name: table["columns"] for name, table in facts["tables"].items()}}
+
+
+def sqlite_backup(source_path: Path, destination_path: Path) -> None:
+    source = sqlite3.connect(sqlite_uri(source_path), uri=True, timeout=60)
+    destination = sqlite3.connect(str(destination_path), timeout=60)
+    try:
+        source.backup(destination, pages=256, sleep=0.05)
+        destination.commit()
+    finally:
+        destination.close()
+        source.close()
+
+
+def database_path(settings: Settings) -> Path:
+    parsed = tomllib.loads(settings.config.read_text(encoding="utf-8"))
+    path = Path(parsed.get("database", "data/tracker.db"))
+    return path if path.is_absolute() else settings.config.parent / path
+
+
+def verified_backup(settings: Settings, database: Path, tag: str) -> tuple[Path, str, dict]:
+    if not database.is_file():
+        raise RuntimeError("live SQLite database is missing; refusing to update")
+    backup_dir = settings.backup_root / "database"
+    backup_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(settings.backup_root, 0o700)
+    os.chmod(backup_dir, 0o700)
+    stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    fd, temp_name = tempfile.mkstemp(prefix=".tracker-", suffix=".tmp", dir=backup_dir)
+    os.close(fd)
+    temp_path = Path(temp_name)
+    try:
+        sqlite_backup(database, temp_path)
+        facts = db_facts(temp_path)
+        with tempfile.TemporaryDirectory(prefix="rift-recap-restore-test-", dir=settings.scratch) as directory:
+            restored = Path(directory) / "restored.db"
+            sqlite_backup(temp_path, restored)
+            if db_facts(restored) != facts:
+                raise RuntimeError("SQLite restore verification did not match the snapshot")
+        digest = sha256_file(temp_path)
+        backup_path = backup_dir / f"tracker-before-{tag}-{stamp}.db"
+        os.chmod(temp_path, 0o600)
+        os.replace(temp_path, backup_path)
+        for old in sorted(backup_dir.glob("tracker-before-*.db"), key=lambda item: item.stat().st_mtime_ns, reverse=True)[settings.keep_db:]:
+            old.unlink(missing_ok=True)
+        return backup_path, digest, facts
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
+def restore_database(settings: Settings, database: Path, snapshot: Path) -> None:
+    if run(settings.systemctl + ["is-active", settings.service], timeout=10, check=False).stdout.strip() == "active":
+        raise RuntimeError("refusing to restore the database while the service is active")
+    fd, name = tempfile.mkstemp(prefix=".tracker-rollback-", suffix=".db", dir=database.parent)
+    os.close(fd)
+    restored = Path(name)
+    try:
+        sqlite_backup(snapshot, restored)
+        db_facts(restored)
+        for suffix in ("-wal", "-shm", "-journal"):
+            Path(str(database) + suffix).unlink(missing_ok=True)
+        copy_owner(database, restored)
+        os.replace(restored, database)
+    finally:
+        restored.unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------- binary and service
+
+def copy_owner(reference: Path, target: Path) -> None:
+    """Gives `target` the owner and mode of `reference` (when it exists); only root can change owners."""
+    if reference.exists():
+        stat = reference.stat()
+        os.chmod(target, stat.st_mode & 0o777)
+        if os.geteuid() == 0:
+            os.chown(target, stat.st_uid, stat.st_gid)
+
+
+def atomic_copy(source: Path, destination: Path, mode: int = 0o755) -> None:
+    fd, name = tempfile.mkstemp(prefix=f".{destination.name}.", dir=destination.parent)
+    temp = Path(name)
+    try:
+        with os.fdopen(fd, "wb") as output, source.open("rb") as input_stream:
+            shutil.copyfileobj(input_stream, output)
+            output.flush()
+            os.fsync(output.fileno())
+        if destination.exists():
+            copy_owner(destination, temp)
+        else:
+            os.chmod(temp, mode)
+        os.replace(temp, destination)
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+def validate_binary(path: Path, tag: str) -> str:
+    size = path.stat().st_size
+    if size < 100_000 or size > MAX_BINARY_BYTES:
+        raise RuntimeError(f"binary size outside accepted range: {size}")
+    header = path.open("rb").read(20)
+    if len(header) < 20 or header[:4] != b"\x7fELF" or header[4] != 2 or header[5] != 1:
+        raise RuntimeError("artifact is not a 64-bit little-endian ELF binary")
+    os.chmod(path, 0o755)
+    version = run([str(path), "--version"], timeout=10, check=False)
+    expected = f"rift-recap {tag.lstrip('v')}"
+    if version.returncode != 0 or version.stdout.strip() != expected:
+        raise RuntimeError(f"binary reports {version.stdout.strip()!r}, expected {expected!r}")
+    return version.stdout.strip()
+
+
+def set_top_level(text: str, key: str, value: str, only_if_present: bool) -> str:
+    pattern = re.compile(rf"(?m)^(\s*{re.escape(key)}\s*=\s*)[^\r\n]*$")
+    updated, count = pattern.subn(lambda match: match.group(1) + json.dumps(value), text, count=1)
+    if count == 0 and not only_if_present:
+        return f"{key} = {json.dumps(value)}\n" + text  # top-level keys must precede any table
+    return updated
+
+
+def candidate_check(settings: Settings, candidate: Path, database: Path) -> str:
+    """Runs `check` with a copy of the live config and database and dummy secrets."""
+    parsed = tomllib.loads(settings.config.read_text(encoding="utf-8"))
+    players = Path(parsed.get("players_file", "players.json"))
+    players = players if players.is_absolute() else settings.config.parent / players
+    prompt = parsed.get("llm", {}).get("prompt_file")
+    with tempfile.TemporaryDirectory(prefix="rift-recap-preflight-", dir=settings.scratch) as directory:
+        temp = Path(directory)
+        test_db = temp / "tracker.db"
+        sqlite_backup(database, test_db)
+        text = set_top_level(settings.config.read_text(encoding="utf-8"), "database", str(test_db), only_if_present=False)
+        text = set_top_level(text, "players_file", str(players), only_if_present=False)
+        if prompt:
+            path = Path(prompt)
+            text = set_top_level(text, "prompt_file", str(path if path.is_absolute() else settings.config.parent / path), only_if_present=True)
+        (temp / "config.toml").write_text(text, encoding="utf-8")
+        (temp / ".env").write_text(DUMMY_ENV, encoding="utf-8")
+        result = run([str(candidate), "--config", str(temp / "config.toml"), "--env-file", str(temp / ".env"), "check"], timeout=60, check=False)
+        if result.returncode != 0:
+            raise RuntimeError(f"candidate config/storage check failed (exit {result.returncode})")
+        return result.stdout.strip()
+
+
+def save_binary_backup(settings: Settings) -> tuple[Path, str]:
+    if not settings.binary.is_file():
+        raise RuntimeError("current service binary is missing; refusing to update")
+    backup_dir = settings.backup_root / "binary"
+    backup_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(settings.backup_root, 0o700)
+    os.chmod(backup_dir, 0o700)
+    old_sha = sha256_file(settings.binary)
+    backup_path = backup_dir / f"rift-recap-{old_sha}.bin"
+    if not backup_path.exists():
+        shutil.copy2(settings.binary, backup_path)
+        os.chmod(backup_path, 0o600)
+    if sha256_file(backup_path) != old_sha:
+        raise RuntimeError("current binary backup hash mismatch")
+    for old in sorted(backup_dir.glob("rift-recap-*.bin"), key=lambda item: item.stat().st_mtime_ns, reverse=True)[settings.keep_bin:]:
+        old.unlink(missing_ok=True)
+    return backup_path, old_sha
+
+
+def service_value(settings: Settings, field: str) -> str:
+    return run(settings.systemctl + ["show", settings.service, f"-p{field}", "--value"], timeout=10).stdout.strip()
+
+
+def process_hash(pid: int) -> str:
+    return sha256_file(Path(f"/proc/{pid}/exe"))
+
+
+def wait_for_service(settings: Settings, expected_hash: str, baseline_restarts: int | None) -> int:
+    """Waits until the service has run the expected binary under one PID for four straight seconds."""
+    deadline = time.monotonic() + settings.health_timeout
+    stable, last_pid = 0, 0
+    while time.monotonic() < deadline:
+        active = run(settings.systemctl + ["is-active", settings.service], timeout=10, check=False).stdout.strip()
+        try:
+            pid, restarts = int(service_value(settings, "MainPID")), int(service_value(settings, "NRestarts"))
+        except (ValueError, RuntimeError):
+            pid, restarts = 0, -1
+        ok = active == "active" and pid > 0
+        if ok:
+            try:
+                ok = process_hash(pid) == expected_hash
+            except (FileNotFoundError, ProcessLookupError, PermissionError):
+                ok = False
+        if baseline_restarts is not None and restarts != baseline_restarts:
+            ok = False
+        stable = stable + 1 if ok and pid == last_pid else 1 if ok else 0
+        last_pid = pid if ok else 0
+        if stable >= 4:
+            return pid
+        time.sleep(1)
+    raise RuntimeError("service did not stay active on the expected binary")
+
+
+# ---------------------------------------------------------------- marker, notify
+
+def read_marker(settings: Settings) -> dict:
+    try:
+        return json.loads(settings.marker.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def write_marker(settings: Settings, text: bytes | None) -> None:
+    if text is None:
+        settings.marker.unlink(missing_ok=True)
+        return
+    fd, name = tempfile.mkstemp(prefix=".deployed-release.", dir=settings.install_dir)
+    temp = Path(name)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temp, 0o600)
+        os.replace(temp, settings.marker)
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+def notify(settings: Settings, message: str) -> None:
+    if not settings.notify_command:
+        return
+    try:
+        run(settings.notify_command, timeout=60, input=message)
+    except Exception as error:  # a failed notification must never fail an update
+        print(f"notification failed: {error}", file=sys.stderr)
+
+
+# ---------------------------------------------------------------- commands
+
+def install(settings: Settings, binary: Path, tag: str) -> dict:
+    database = database_path(settings)
+    previous_marker = settings.marker.read_bytes() if settings.marker.exists() else None
+    replaced, snapshot, snapshot_facts, old_backup, old_hash = False, None, None, None, None
+    try:
+        version = validate_binary(binary, tag)
+        preflight = candidate_check(settings, binary, database)
+        old_backup, old_hash = save_binary_backup(settings)
+        snapshot, database_hash, snapshot_facts = verified_backup(settings, database, tag)
+        new_hash = sha256_file(binary)
+        atomic_copy(binary, settings.binary)
+        replaced = True
+        baseline = int(service_value(settings, "NRestarts"))
+        run(settings.systemctl + ["restart", settings.service], timeout=45)
+        pid = wait_for_service(settings, new_hash, baseline)
+        write_marker(settings, json.dumps({"tag": tag, "deployed_at": dt.datetime.now(dt.timezone.utc).isoformat(), "binary_sha256": new_hash,
+                                          "previous_binary_sha256": old_hash, "database_backup": str(snapshot), "database_sha256": database_hash},
+                                         sort_keys=True).encode() + b"\n")
+        return {"status": "updated", "tag": tag, "version": version, "pid": pid, "binary_sha256": new_hash, "previous_binary_sha256": old_hash,
+                "database_backup": str(snapshot), "preflight": preflight}
+    except Exception as error:
+        rollback = "not needed (binary was never replaced)"
+        if replaced:
+            try:
+                run(settings.systemctl + ["stop", settings.service], timeout=30, check=False)
+                deadline = time.monotonic() + 15
+                while time.monotonic() < deadline and run(settings.systemctl + ["is-active", settings.service], timeout=10, check=False).stdout.strip() == "active":
+                    time.sleep(1)
+                if old_backup is None or snapshot is None or snapshot_facts is None:
+                    raise RuntimeError("rollback material is missing")
+                atomic_copy(old_backup, settings.binary)
+                # Put the snapshot back only if the new binary changed the schema; otherwise keep what it wrote.
+                try:
+                    schema_changed = schema_of(db_facts(database)) != schema_of(snapshot_facts)
+                except Exception:
+                    schema_changed = True
+                if schema_changed:
+                    restore_database(settings, database, snapshot)
+                write_marker(settings, previous_marker)
+                run(settings.systemctl + ["start", settings.service], timeout=30)
+                wait_for_service(settings, old_hash or sha256_file(settings.binary), None)
+                rollback = "old binary restored" + (" with the database snapshot (schema had changed)" if schema_changed else "")
+            except Exception as rollback_error:
+                rollback = f"ROLLBACK FAILED: {rollback_error}"
+        raise RuntimeError(f"update to {tag} failed: {error}; {rollback}") from error
+
+
+def command_update(settings: Settings, args: argparse.Namespace) -> int:
+    settings.install_dir.mkdir(parents=True, exist_ok=True)
+    with open(settings.lock, "a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            print("another update is running", file=sys.stderr)
+            return 0
+        info = release_info(settings, args.tag)
+        tag = info["tag_name"]
+        current = read_marker(settings).get("tag")
+        if current == tag and not args.force and not args.dry_run:
+            print(json.dumps({"status": "up-to-date", "tag": tag}))
+            return 0
+        with tempfile.TemporaryDirectory(prefix="rift-recap-update-", dir=settings.scratch) as directory:
+            try:
+                binary = fetch_release(settings, info, Path(directory))
+                if args.dry_run:
+                    version = validate_binary(binary, tag)
+                    print(json.dumps({"status": "dry-run ok", "tag": tag, "version": version, "preflight": candidate_check(settings, binary, database_path(settings)),
+                                      "binary_sha256": sha256_file(binary)}, sort_keys=True))
+                    return 0
+                result = install(settings, binary, tag)
+            except Exception as error:
+                notify(settings, f"❌ rift-recap update to {tag} failed: {error}")
+                raise
+        notify(settings, f"✅ rift-recap updated {current or 'unknown'} → {tag}\n{info.get('html_url', '')}")
+        print(json.dumps(result, sort_keys=True))
+        return 0
+
+
+def command_check(settings: Settings, args: argparse.Namespace) -> int:
+    latest = release_info(settings, None)["tag_name"]
+    current = read_marker(settings).get("tag")
+    print(json.dumps({"installed": current, "latest": latest, "up_to_date": current == latest}))
+    return 0
+
+
+def command_status(settings: Settings, args: argparse.Namespace) -> int:
+    active = run(settings.systemctl + ["is-active", settings.service], timeout=10, check=False).stdout.strip()
+    try:
+        pid = int(service_value(settings, "MainPID"))
+    except (ValueError, RuntimeError):
+        pid = 0
+    binary_hash = sha256_file(settings.binary) if settings.binary.is_file() else None
+    live_hash = None
+    if pid > 0:
+        try:
+            live_hash = process_hash(pid)
+        except (FileNotFoundError, ProcessLookupError, PermissionError):
+            pass
+    marker = read_marker(settings)
+    healthy = bool(active == "active" and pid > 0 and binary_hash and live_hash == binary_hash and marker.get("binary_sha256") == binary_hash and marker.get("tag"))
+    print(json.dumps({"healthy": healthy, "service": settings.service, "active": active, "pid": pid, "binary_sha256": binary_hash,
+                      "process_sha256": live_hash, "tag": marker.get("tag"), "deployed_at": marker.get("deployed_at")}, sort_keys=True))
+    return 0 if healthy else 1
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Pull-based updater for rift-recap")
+    parser.add_argument("--config", default=os.environ.get("RIFT_RECAP_UPDATE_CONFIG", DEFAULT_CONFIG))
+    sub = parser.add_subparsers(dest="command")
+    update = sub.add_parser("update", help="install the latest release (default)")
+    update.add_argument("--tag", help="install this release tag instead of the latest one (also works for older tags)")
+    update.add_argument("--force", action="store_true", help="reinstall even if the tag is already installed")
+    update.add_argument("--dry-run", action="store_true", help="download, verify and pre-flight the binary, then stop before touching the install")
+    sub.add_parser("check", help="show installed and latest release")
+    sub.add_parser("status", help="show service health")
+    args = parser.parse_args()
+    if args.command is None:
+        args = parser.parse_args(["--config", args.config, "update"])
+    if getattr(args, "tag", None) and not TAG.fullmatch(args.tag):
+        fail("--tag must look like v1.2.3")
+    settings = Settings(Path(args.config))
+    return {"update": command_update, "check": command_check, "status": command_status}[args.command](settings, args)
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except SystemExit:
+        raise
+    except Exception as error:
+        fail(str(error))

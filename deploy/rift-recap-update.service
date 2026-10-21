@@ -1,0 +1,8 @@
+[Unit]
+Description=Install the latest rift-recap release
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/rift-recap-update --config /etc/rift-recap/update.toml
