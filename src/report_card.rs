@@ -111,8 +111,9 @@ pub fn card(report: &Report, lang: Lang, art: &Assets) -> Result<Vec<u8>> {
     rasterize(&cv.svg, W, height.ceil() as u32)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn row(cv: &mut Canvas, p: &PlayerLine, y: f32, index: usize, lang: Lang, art: &Assets, max_damage: i64, widest: i64) {
-    cv.block(0.0, y, W as f32, ROW, 0.0, if index % 2 == 0 { ROW_A } else { ROW_B }, "");
+    cv.block(0.0, y, W as f32, ROW, 0.0, if index.is_multiple_of(2) { ROW_A } else { ROW_B }, "");
     cv.line(0.0, y + ROW, W as f32, y + ROW, RULE, 1.0);
     cv.picture(portrait(art, p), 32.0, y + 6.0, 42.0, 42.0, 0.0, "xMidYMid slice");
     cv.frame(32.0, y + 6.0, 42.0, 42.0, GOLD);

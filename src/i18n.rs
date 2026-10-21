@@ -151,7 +151,6 @@ catalog! {
     // Shared vocabulary
     Win: "Thắng", "Win";
     Loss: "Thua", "Loss";
-    Remake: "Chơi lại", "Remake";
     TeamBlue: "Đội xanh", "Blue team";
     TeamRed: "Đội đỏ", "Red team";
     TeamNumber: "Đội {}", "Team {}";

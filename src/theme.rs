@@ -1,4 +1,6 @@
 //! Shared look of the scoreboard and report cards: dark navy panels, gold chrome and teal accents.
+// Drawing helpers take plain geometry arguments, like SVG attributes do.
+#![allow(clippy::too_many_arguments)]
 use crate::render::{Canvas, escape};
 use std::fmt::Write;
 

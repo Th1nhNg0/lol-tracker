@@ -180,7 +180,7 @@ fn column_labels(cv: &mut Canvas, y: f32, lang: Lang) {
 
 fn row(cv: &mut Canvas, p: &Participant, y: f32, index: usize, team_kills: i64, ctx: &Context) {
     let (art, lang) = (ctx.art, ctx.lang);
-    cv.block(0.0, y, W as f32, ROW, 0.0, if index % 2 == 0 { ROW_A } else { ROW_B }, "");
+    cv.block(0.0, y, W as f32, ROW, 0.0, if index.is_multiple_of(2) { ROW_A } else { ROW_B }, "");
     if p.tracked {
         let wash = cv.gradient(&[(0.0, TEAL, 0.20), (0.55, TEAL, 0.05), (1.0, TEAL, 0.0)], (0.0, 0.0, 1.0, 0.0));
         cv.block(0.0, y, W as f32, ROW, 0.0, &wash, "");

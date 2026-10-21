@@ -6,6 +6,8 @@ mod model;
 mod presentation;
 mod reports;
 mod render_assets;
+#[cfg(test)]
+mod render_tests;
 mod scoreboard;
 mod render;
 mod report_card;
@@ -39,7 +41,7 @@ enum Mode {
     Check,
     /// Read-only Riot account and Discord token checks. No gateway or messages.
     Probe,
-    /// Render a recent real match to PNG; --post sends one preview per language without a gateway.
+    /// Render a recent real match to a WebP image; --post sends one preview per language without a gateway.
     RenderScoreboard {
         #[arg(long, default_value = "data/scoreboard.webp")]
         output: PathBuf,
@@ -51,7 +53,7 @@ enum Mode {
         #[arg(long)]
         language: Option<String>,
     },
-    /// Render a daily/weekly/monthly report card to PNG (and print the text version). Uses stored
+    /// Render a daily/weekly/monthly report card to a WebP image (and print the text version). Uses stored
     /// matches, or fetches recent real matches read-only when none are stored. Never posts.
     RenderReport {
         #[arg(long, default_value = "weekly")]

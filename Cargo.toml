@@ -1,6 +1,6 @@
 [package]
 name = "rift-recap"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "MIT"
 description = "Self-hosted Discord bot that posts a scoreboard after every League of Legends game your squad plays, plus daily, weekly and monthly LP recaps"
@@ -28,6 +28,10 @@ webp = { version = "0.3.1", default-features = false }
 
 [profile.dev]
 debug = 0
+
+# Image rendering is slow unoptimized; build the dependencies (resvg, tiny-skia, libwebp) with optimizations.
+[profile.dev.package."*"]
+opt-level = 2
 
 [profile.release]
 strip = true

@@ -10,7 +10,7 @@ fn mentions() -> CreateAllowedMentions { CreateAllowedMentions::new().all_users(
 async fn scoreboard_image(app: &App, game: &Match) -> Option<Vec<u8>> {
     match render::image(app, game.clone(), app.cfg.language, false).await {
         Ok(image) => Some(image),
-        Err(error) => { warn!(%error, "PNG unavailable; retaining text scoreboard fallback"); None }
+        Err(error) => { warn!(%error, "Scoreboard image unavailable; retaining text scoreboard fallback"); None }
     }
 }
 fn safe_http<T>(value: serenity::Result<T>) -> Result<T> {
@@ -313,13 +313,13 @@ async fn deliver(app: &App, http: &Http, delivery: &crate::store::Delivery) -> R
             // The card is rendered at delivery, like result scoreboards; text is the fallback.
             let card = match report {
                 Some(report) => match crate::report_card::image(app, report.clone(), lang).await {
-                    Ok(png) => Some((report.title(lang), report.range(lang), png)),
+                    Ok(image) => Some((report.title(lang), report.range(lang), image)),
                     Err(error) => { warn!(%error, "Report card unavailable; sending text"); None }
                 },
                 None => None,
             };
             let builder = match card {
-                Some((title, range, png)) => CreateMessage::new().content(format!("**{title}** · {range}")).add_file(CreateAttachment::bytes(png, format!("report.{}", render::IMAGE_EXT))),
+                Some((title, range, image)) => CreateMessage::new().content(format!("**{title}** · {range}")).add_file(CreateAttachment::bytes(image, format!("report.{}", render::IMAGE_EXT))),
                 None if text.encode_utf16().count() <= 1900 => CreateMessage::new().content(text),
                 None => CreateMessage::new().content(lang.t(Msg::ReportAttached)).add_file(CreateAttachment::bytes(text.as_bytes(), "report.txt")),
             };
