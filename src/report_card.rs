@@ -46,9 +46,8 @@ pub fn card(report: &Report, lang: Lang, art: &Assets) -> Result<Vec<u8>> {
     ensure!(!report.players.is_empty() && report.players.len() <= 100, "Unsupported report size");
     let awards = report.awards(lang);
     let climbed: Vec<&PlayerLine> = report.players.iter().filter(|p| p.lp().is_some_and(|d| d >= 0)).collect();
-    // Biggest drop first.
-    let mut dropped: Vec<&PlayerLine> = report.players.iter().filter(|p| p.lp().is_some_and(|d| d < 0)).collect();
-    dropped.sort_by_key(|p| p.lp());
+    // Players arrive sorted by LP, highest first, so the smallest drop leads its block.
+    let dropped: Vec<&PlayerLine> = report.players.iter().filter(|p| p.lp().is_some_and(|d| d < 0)).collect();
     let unknown: Vec<&PlayerLine> = report.players.iter().filter(|p| p.lp().is_none()).collect();
     let blocks = [(lang.t(Msg::BlockClimbed), GAIN, climbed), (lang.t(Msg::BlockDropped), LOSS, dropped), (lang.t(Msg::BlockUnknown), NEUTRAL, unknown)];
     let honours_h = if awards.is_empty() { 0.0 } else { HEAD_H + 2.0 * TILE_H };
